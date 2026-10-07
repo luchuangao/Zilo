@@ -1,0 +1,13 @@
+# SwiftPM and Xcode build output
+.build/
+.build-local/
+DerivedData/
+.release/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+# Local app and archive artifacts
+*.app/
+*.dmg
+*.xcarchive/
