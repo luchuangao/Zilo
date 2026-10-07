@@ -8,7 +8,7 @@ import AppKit
     @AppStorage("appearance") private var appearance = "system"
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     var body: some Scene {
-        WindowGroup("知行清单", id: "main") {
+        WindowGroup("Zilo", id: "main") {
             MainView().environmentObject(store).environmentObject(focus).environmentObject(calendar)
                 .preferredColorScheme(appearance == "dark" ? .dark : appearance == "light" ? .light : nil)
                 .onAppear {
@@ -27,7 +27,7 @@ import AppKit
             CommandGroup(after: .newItem) { Button("快速添加任务") { DesktopBridge.quickAction?() }.keyboardShortcut("n"); Button("桌面便签") { DesktopBridge.panel(title: "今日便签",view: StickyView().environmentObject(store),size: NSSize(width: 340,height: 480)) } }
         }
         Settings { SettingsView().environmentObject(store).environmentObject(calendar).environmentObject(focus) }
-        MenuBarExtra("知行清单",systemImage: "checkmark.circle.fill") { MenuPanel().environmentObject(store).environmentObject(focus) }.menuBarExtraStyle(.window)
+        MenuBarExtra("Zilo",systemImage: "checkmark.circle.fill") { MenuPanel().environmentObject(store).environmentObject(focus) }.menuBarExtraStyle(.window)
     }
     private func undoDocumentOrTask(redo: Bool = false) {
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, let coordinator = editor.delegate as? DetailDocumentEditor.Coordinator {
@@ -49,7 +49,7 @@ struct QuickAddPanel: View {
 }
 struct MenuPanel: View {
     @EnvironmentObject var store: Store; @EnvironmentObject var focus: FocusTimer; @Environment(\.openWindow) var openWindow
-    var body: some View { VStack(alignment: .leading,spacing: 12) { HStack { Label("知行清单",systemImage: "checkmark.circle.fill").font(.headline); Spacer(); Button("打开") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) } }; QuickAddPanel(); Divider(); Text("今天").font(.headline); ForEach(store.tasks.filter { !$0.deleted && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.prefix(8)) { task in HStack { Button { store.complete(task.id) } label: { Image(systemName: "circle") }.buttonStyle(.plain); Text(task.title).lineLimit(1) } }; Divider(); HStack { Text(focus.display).monospacedDigit(); Button(focus.running ? "暂停" : "专注") { if focus.running { focus.pause() } else { focus.start() } }; Button("退出") { NSApp.terminate(nil) } } }.padding().frame(width: 370) }
+    var body: some View { VStack(alignment: .leading,spacing: 12) { HStack { Label("Zilo",systemImage: "checkmark.circle.fill").font(.headline); Spacer(); Button("打开") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) } }; QuickAddPanel(); Divider(); Text("今天").font(.headline); ForEach(store.tasks.filter { !$0.deleted && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.prefix(8)) { task in HStack { Button { store.complete(task.id) } label: { Image(systemName: "circle") }.buttonStyle(.plain); Text(task.title).lineLimit(1) } }; Divider(); HStack { Text(focus.display).monospacedDigit(); Button(focus.running ? "暂停" : "专注") { if focus.running { focus.pause() } else { focus.start() } }; Button("退出") { NSApp.terminate(nil) } } }.padding().frame(width: 370) }
 }
 struct StickyView: View { @EnvironmentObject var store: Store; var listID: UUID? = nil; @State private var input = ""; var body: some View { VStack(alignment: .leading) { Text(store.lists.first { $0.id == listID }?.name ?? "今天要做").font(.title2.bold()); TextField("添加任务",text: $input).onSubmit { store.add(listID == nil ? input + " 今天" : input,listID: listID); input = "" }; ScrollView { ForEach(store.tasks.filter { !$0.deleted && !$0.completed && !$0.isTemplate && (listID != nil ? $0.listID == listID : $0.due.map { Calendar.current.isDateInToday($0) } == true) }) { task in HStack { Button { store.complete(task.id) } label: { Image(systemName: "circle") }.buttonStyle(.plain); Text(task.title); Spacer() }.padding(.vertical,8) } } }.padding().background(Color.yellow.opacity(0.12)) } }
 /// Shared surface and accent colors adapt to the application's appearance.
@@ -131,5 +131,5 @@ struct ThemeColorChoices: View {
 struct BrandIcon: View {
     var size: CGFloat = 36
     private static let image = Bundle.main.url(forResource: "AppIcon-zhixing",withExtension: "icns").flatMap { NSImage(contentsOf: $0) } ?? NSImage(named: NSImage.applicationIconName) ?? NSImage(size: NSSize(width: 32,height: 32))
-    var body: some View { Image(nsImage: Self.image).resizable().interpolation(.high).scaledToFit().frame(width: size,height: size).accessibilityLabel("知行清单") }
+    var body: some View { Image(nsImage: Self.image).resizable().interpolation(.high).scaledToFit().frame(width: size,height: size).accessibilityLabel("Zilo") }
 }

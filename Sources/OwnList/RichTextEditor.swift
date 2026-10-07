@@ -154,6 +154,38 @@ final class DocumentEditorController: ObservableObject {
     }
 }
 
+/// Model echoes must not replace an in-progress native edit. Keep the last
+/// model read separate from native saves, including changes to formatting only.
+struct DocumentEditorSnapshot: Equatable {
+    let text: String
+    let data: Data?
+    let rich: Bool
+    init(text: String,data: Data?,rich: Bool) { self.text = text; self.data = data; self.rich = rich }
+    init(editor: NSTextView) {
+        text = editor.string; rich = editor.isRichText
+        data = rich ? editor.textStorage.flatMap(RichDocument.encode) : nil
+    }
+}
+final class DocumentEditorSyncState {
+    private var observed: DocumentEditorSnapshot
+    private var savedNative: DocumentEditorSnapshot?
+    private var emitted: DocumentEditorSnapshot?
+    init(_ model: DocumentEditorSnapshot) { observed = model }
+    func shouldLoad(_ model: DocumentEditorSnapshot) -> Bool {
+        guard model != observed else { return false }
+        observed = model
+        return model != emitted
+    }
+    func didLoad(_ editor: NSTextView) {
+        savedNative = DocumentEditorSnapshot(editor: editor); emitted = nil
+    }
+    func shouldSave(_ snapshot: DocumentEditorSnapshot) -> Bool {
+        guard snapshot != savedNative else { return false }
+        savedNative = snapshot; emitted = snapshot
+        return true
+    }
+}
+
 /// Borderless, height-fitting document editor; the enclosing detail owns scrolling.
 struct DetailDocumentEditor: NSViewRepresentable {
     var text: String; var data: Data?; var rich: Bool
@@ -173,25 +205,17 @@ struct DetailDocumentEditor: NSViewRepresentable {
         editor.textContainer?.lineFragmentPadding = 0; editor.textContainer?.widthTracksTextView = true
         editor.isAutomaticQuoteSubstitutionEnabled = false; editor.isAutomaticDashSubstitutionEnabled = false
         editor.setAccessibilityLabel("任务正文")
-        editor.delegate = context.coordinator; scroll.documentView = editor
+        scroll.documentView = editor
         scroll.drawsBackground = false; scroll.borderType = .noBorder
         scroll.hasVerticalScroller = false; scroll.hasHorizontalScroller = false
         scroll.onHeight = { [weak coordinator = context.coordinator] value in coordinator?.resize(value) }
-        populate(editor); controller.editor = editor; controller.rich = rich
+        populate(editor); context.coordinator.attach(editor)
+        controller.editor = editor; controller.rich = rich
         return scroll
     }
     func updateNSView(_ view: DocumentScrollView,context: Context) {
         context.coordinator.parent = self
-        guard let editor = view.documentView as? NSTextView else { return }
-        controller.editor = editor; controller.rich = rich; editor.isRichText = rich; editor.isEditable = editable; editor.importsGraphics = rich
-        (editor as? DocumentTextView)?.transferError = onError
-        if editor.string != text || context.coordinator.lastData != data || context.coordinator.lastRich != rich {
-            let selection = editor.selectedRange(); populate(editor)
-            let count = (editor.string as NSString).length
-            editor.setSelectedRange(NSRange(location: min(selection.location,count),length: min(selection.length,max(0,count - selection.location))))
-        }
-        context.coordinator.lastData = data; context.coordinator.lastRich = rich
-        view.needsLayout = true
+        context.coordinator.synchronize(view)
     }
     func populate(_ editor: NSTextView) {
         editor.isRichText = rich
@@ -208,33 +232,62 @@ struct DetailDocumentEditor: NSViewRepresentable {
         editor.typingAttributes = [.font: NSFont.systemFont(ofSize: 14),.foregroundColor: NSColor.labelColor]
     }
     final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: DetailDocumentEditor; var lastData: Data?; var lastRich = false; var convertingMarkdown = false
-        init(parent: DetailDocumentEditor) { self.parent = parent; lastData = parent.data; lastRich = parent.rich }
+        var parent: DetailDocumentEditor
+        let sync: DocumentEditorSyncState
+        var applyingModel = false
+        var convertingMarkdown = false
+        init(parent: DetailDocumentEditor) {
+            self.parent = parent
+            sync = DocumentEditorSyncState(DocumentEditorSnapshot(text: parent.text,data: parent.data,rich: parent.rich))
+        }
+        func attach(_ editor: DocumentTextView) {
+            editor.delegate = self
+            editor.compositionDidEnd = { [weak self] editor in
+                self?.textDidChange(Notification(name: NSText.didChangeNotification,object: editor))
+            }
+            sync.didLoad(editor)
+        }
+        func synchronize(_ view: DocumentScrollView) {
+            guard let editor = view.documentView as? NSTextView else { return }
+            parent.controller.editor = editor
+            (editor as? DocumentTextView)?.transferError = parent.onError
+            // Even a height or theme refresh must leave the marked range and
+            // input-method session intact until its text is committed.
+            guard !editor.hasMarkedText() else { view.needsLayout = true; return }
+            let model = DocumentEditorSnapshot(text: parent.text,data: parent.data,rich: parent.rich)
+            if sync.shouldLoad(model) {
+                applyingModel = true
+                let selection = editor.selectedRange()
+                parent.populate(editor)
+                let count = editor.string.utf16.count
+                let location = min(selection.location,count)
+                editor.setSelectedRange(NSRange(location: location,length: min(selection.length,count - location)))
+                sync.didLoad(editor)
+                applyingModel = false
+            }
+            parent.controller.rich = parent.rich
+            if editor.isRichText != parent.rich { editor.isRichText = parent.rich }
+            if editor.isEditable != parent.editable { editor.isEditable = parent.editable }
+            if editor.importsGraphics != parent.rich { editor.importsGraphics = parent.rich }
+            view.needsLayout = true
+        }
         func resize(_ value: CGFloat) {
             guard abs(parent.height - value) > 1 else { return }
             DispatchQueue.main.async { [weak self] in if let self, abs(self.parent.height - value) > 1 { self.parent.height = value } }
         }
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard let editor = notification.object as? NSTextView else { return }
+            guard !applyingModel, let editor = notification.object as? NSTextView, !editor.hasMarkedText() else { return }
             if parent.rich, editor.selectedRange().length == 0,
                let storage = editor.textStorage, editor.selectedRange().location < storage.length {
                 let attributes = storage.attributes(at: editor.selectedRange().location,effectiveRange: nil)
                 if MarkdownTyping.isCodeBlock(attributes) { editor.typingAttributes = MarkdownTyping.codeBlockAttributes }
                 else if MarkdownTyping.isCodeBlock(editor.typingAttributes) { editor.typingAttributes = attributes }
             }
-            if parent.rich, !convertingMarkdown, !editor.hasMarkedText(), editor.selectedRange().length == 0 {
-                DispatchQueue.main.async { [weak self,weak editor] in
-                    guard let self, let editor, !self.convertingMarkdown, !editor.hasMarkedText() else { return }
-                    self.convertingMarkdown = true
-                    let changed = MarkdownTyping.recognize(in: editor)
-                    self.convertingMarkdown = false
-                    if changed { self.persist(editor) }
-                }
-            }
+            // Recognize syntax on a committed edit, never on cursor movement.
             DispatchQueue.main.async { [weak self] in self?.parent.controller.refreshSelection() }
         }
         func performUndo(in editor: NSTextView,redo: Bool = false) {
-            guard let undo = editor.undoManager, redo ? undo.canRedo : undo.canUndo else { return }
+            guard !editor.hasMarkedText(), let undo = editor.undoManager, redo ? undo.canRedo : undo.canUndo else { return }
             convertingMarkdown = true
             if redo { undo.redo() } else { undo.undo() }
             convertingMarkdown = false
@@ -242,8 +295,9 @@ struct DetailDocumentEditor: NSViewRepresentable {
             parent.controller.refreshSelection()
         }
         func persist(_ editor: NSTextView) {
-            let data = parent.rich ? editor.textStorage.flatMap(RichDocument.encode) : nil
-            lastData = data; parent.onChange(editor.string,data)
+            guard !applyingModel, !editor.hasMarkedText() else { return }
+            let snapshot = DocumentEditorSnapshot(editor: editor)
+            if sync.shouldSave(snapshot) { parent.onChange(snapshot.text,snapshot.data) }
             editor.enclosingScrollView?.needsLayout = true
         }
         func textView(_ textView: NSTextView,doCommandBy commandSelector: Selector) -> Bool {
@@ -255,8 +309,9 @@ struct DetailDocumentEditor: NSViewRepresentable {
             return false
         }
         func textDidChange(_ notification: Notification) {
-            guard !convertingMarkdown, let editor = notification.object as? NSTextView else { return }
-            if parent.rich && !editor.hasMarkedText(), editor.undoManager?.isUndoing != true, editor.undoManager?.isRedoing != true {
+            guard !applyingModel, !convertingMarkdown, let editor = notification.object as? NSTextView,
+                  !editor.hasMarkedText() else { return }
+            if parent.rich, editor.undoManager?.isUndoing != true, editor.undoManager?.isRedoing != true {
                 convertingMarkdown = true
                 MarkdownTyping.recognize(in: editor)
                 convertingMarkdown = false
@@ -264,11 +319,33 @@ struct DetailDocumentEditor: NSViewRepresentable {
             }
             persist(editor)
         }
+        func textDidEndEditing(_ notification: Notification) {
+            guard let editor = notification.object as? NSTextView else { return }
+            persist(editor)
+        }
     }
 }
 /// Code blocks use ordinary RTF paragraph attributes, so their boundaries survive
 /// app restarts, backups and sync. Paint the panel separately for light/dark mode.
 class DocumentTextView: NSTextView {
+    var compositionDidEnd: ((DocumentTextView) -> Void)?
+    override func insertText(_ insertString: Any,replacementRange: NSRange) {
+        let wasComposing = hasMarkedText()
+        super.insertText(insertString,replacementRange: replacementRange)
+        if wasComposing && !hasMarkedText() { compositionDidEnd?(self) }
+    }
+    override func unmarkText() {
+        let wasComposing = hasMarkedText()
+        super.unmarkText()
+        if wasComposing {
+            // AppKit may unmark inside insertText before replacing candidates.
+            // Wait until that native operation finishes before saving.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.hasMarkedText() else { return }
+                self.compositionDidEnd?(self)
+            }
+        }
+    }
     var transferError: (String) -> Void = { _ in }
     func insertImage(_ data: Data, name: String = "图片.png") throws {
         let block = NSMutableAttributedString(string: "")
@@ -349,11 +426,57 @@ struct RichTextEditor: NSViewRepresentable {
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
-        let editor = DocumentTextView(); editor.isRichText = true; editor.importsGraphics = true; editor.isEditable = true; editor.isSelectable = true; editor.allowsUndo = true; editor.usesFontPanel = true; editor.isAutomaticLinkDetectionEnabled = true; editor.isVerticallyResizable = true; editor.isHorizontallyResizable = false; editor.autoresizingMask = [.width]; editor.textContainer?.widthTracksTextView = true; editor.textContainerInset = NSSize(width: 8,height: 8); editor.delegate = context.coordinator; scroll.documentView = editor; populate(editor); return scroll
+        let editor = DocumentTextView(); editor.isRichText = true; editor.importsGraphics = true; editor.isEditable = true; editor.isSelectable = true; editor.allowsUndo = true; editor.usesFontPanel = true; editor.isAutomaticLinkDetectionEnabled = true; editor.isVerticallyResizable = true; editor.isHorizontallyResizable = false; editor.autoresizingMask = [.width]; editor.textContainer?.widthTracksTextView = true; editor.textContainerInset = NSSize(width: 8,height: 8)
+        scroll.documentView = editor; populate(editor); context.coordinator.attach(editor)
+        return scroll
     }
-    func updateNSView(_ view: NSScrollView,context: Context) { context.coordinator.parent = self; guard let editor = view.documentView as? NSTextView else { return }; if editor.string != text || (editor.window?.firstResponder !== editor && data != context.coordinator.lastData) { let selection = editor.selectedRange(); populate(editor); editor.setSelectedRange(NSRange(location: min(selection.location,editor.string.utf16.count),length: 0)) }; context.coordinator.lastData = data }
-    private func populate(_ editor: NSTextView) { if let data, let rich = RichDocument.decode(data) { RichDocument.fitImages(rich,width: max(80,editor.bounds.width - 16)); editor.textStorage?.setAttributedString(rich) } else { editor.string = text; editor.font = .systemFont(ofSize: 14); editor.textColor = .labelColor } }
-    final class Coordinator: NSObject,NSTextViewDelegate { var parent: RichTextEditor; var lastData: Data?; init(parent: RichTextEditor) { self.parent = parent }; func textDidChange(_ notification: Notification) { guard let editor = notification.object as? NSTextView else { return }; let data = editor.textStorage.flatMap(RichDocument.encode); lastData = data; parent.onChange(editor.string,data) } }
+    func updateNSView(_ view: NSScrollView,context: Context) {
+        context.coordinator.parent = self
+        context.coordinator.synchronize(view)
+    }
+    func populate(_ editor: NSTextView) {
+        if let data, let rich = RichDocument.decode(data) { RichDocument.fitImages(rich,width: max(80,editor.bounds.width - 16)); editor.textStorage?.setAttributedString(rich) }
+        else { editor.string = text; editor.font = .systemFont(ofSize: 14); editor.textColor = .labelColor }
+    }
+    final class Coordinator: NSObject,NSTextViewDelegate {
+        var parent: RichTextEditor
+        let sync: DocumentEditorSyncState
+        var applyingModel = false
+        init(parent: RichTextEditor) {
+            self.parent = parent
+            sync = DocumentEditorSyncState(DocumentEditorSnapshot(text: parent.text,data: parent.data,rich: true))
+        }
+        func attach(_ editor: DocumentTextView) {
+            editor.delegate = self
+            editor.compositionDidEnd = { [weak self] editor in self?.persist(editor) }
+            sync.didLoad(editor)
+        }
+        func synchronize(_ view: NSScrollView) {
+            guard let editor = view.documentView as? NSTextView, !editor.hasMarkedText() else { return }
+            if sync.shouldLoad(DocumentEditorSnapshot(text: parent.text,data: parent.data,rich: true)) {
+                applyingModel = true
+                let selection = editor.selectedRange(); parent.populate(editor)
+                let count = editor.string.utf16.count
+                let location = min(selection.location,count)
+                editor.setSelectedRange(NSRange(location: location,length: min(selection.length,count - location)))
+                sync.didLoad(editor)
+                applyingModel = false
+            }
+        }
+        func persist(_ editor: NSTextView) {
+            guard !applyingModel, !editor.hasMarkedText() else { return }
+            let snapshot = DocumentEditorSnapshot(editor: editor)
+            if sync.shouldSave(snapshot) { parent.onChange(snapshot.text,snapshot.data) }
+        }
+        func textDidChange(_ notification: Notification) {
+            guard let editor = notification.object as? NSTextView else { return }
+            persist(editor)
+        }
+        func textDidEndEditing(_ notification: Notification) {
+            guard let editor = notification.object as? NSTextView else { return }
+            persist(editor)
+        }
+    }
 }
 
 /// Markdown shortcuts in the default document editor. Only the active, committed

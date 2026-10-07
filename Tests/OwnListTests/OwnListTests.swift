@@ -4,6 +4,155 @@ import PDFKit
 @testable import OwnList
 
 final class OwnListTests: XCTestCase {
+    @MainActor func testChineseCompositionDoesNotSaveUnconfirmedCandidates() {
+        let editor = DocumentTextView()
+        editor.isRichText = true
+        editor.string = "已有正文："
+        editor.typingAttributes = MarkdownTyping.bodyAttributes
+        editor.setSelectedRange(NSRange(location: editor.string.utf16.count,length: 0))
+        var saved: [String] = []
+        let parent = DetailDocumentEditor(text: editor.string,data: nil,rich: true,controller: DocumentEditorController(),height: .constant(26)) { text,_ in saved.append(text) }
+        let coordinator = DetailDocumentEditor.Coordinator(parent: parent)
+        editor.delegate = coordinator
+        editor.setMarkedText("zhongwen",selectedRange: NSRange(location: 8,length: 0),replacementRange: editor.selectedRange())
+        XCTAssertTrue(editor.hasMarkedText())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification,object: editor))
+        XCTAssertTrue(saved.isEmpty,"输入法选词期间不能把拼音或候选字写进任务")
+        editor.delegate = nil
+    }
+
+    @MainActor func testChineseCompositionSurvivesRefreshAndCommitsInBothModes() throws {
+        for rich in [true,false] {
+            let prefix = "已有🙂正文："
+            var saved: [(String,Data?)] = []
+            let parent = DetailDocumentEditor(text: prefix,data: nil,rich: rich,controller: DocumentEditorController(),height: .constant(26)) { text,data in saved.append((text,data)) }
+            let view = DocumentScrollView(frame: NSRect(x: 0,y: 0,width: 300,height: 26))
+            let editor = DocumentTextView(frame: view.bounds); view.documentView = editor
+            parent.populate(editor)
+            let coordinator = DetailDocumentEditor.Coordinator(parent: parent); coordinator.attach(editor)
+            editor.setSelectedRange(NSRange(location: prefix.utf16.count,length: 0))
+            editor.setMarkedText("zhongwen",selectedRange: NSRange(location: 8,length: 0),replacementRange: editor.selectedRange())
+            coordinator.textDidChange(Notification(name: NSText.didChangeNotification,object: editor))
+            let marked = editor.markedRange(), selection = editor.selectedRange()
+            for _ in 0..<3 { coordinator.synchronize(view); view.layout() }
+            XCTAssertTrue(editor.hasMarkedText()); XCTAssertEqual(editor.markedRange(),marked); XCTAssertEqual(editor.selectedRange(),selection)
+            XCTAssertTrue(saved.isEmpty)
+            editor.setMarkedText("中文候选",selectedRange: NSRange(location: 4,length: 0),replacementRange: NSRange(location: NSNotFound,length: 0))
+            coordinator.synchronize(view)
+            XCTAssertTrue(editor.hasMarkedText()); XCTAssertTrue(saved.isEmpty)
+            editor.insertText("中文🙂",replacementRange: NSRange(location: NSNotFound,length: 0))
+            XCTAssertFalse(editor.hasMarkedText()); XCTAssertEqual(editor.string,prefix + "中文🙂")
+            XCTAssertEqual(saved.map(\.0),[prefix + "中文🙂"])
+            if rich { XCTAssertEqual(try XCTUnwrap(saved.last?.1.flatMap(RichDocument.decode)).string,editor.string) }
+            else { XCTAssertNil(saved.last?.1) }
+            var echoed = parent; echoed.text = saved.last!.0; echoed.data = saved.last!.1
+            coordinator.parent = echoed
+            let committedSelection = editor.selectedRange()
+            coordinator.synchronize(view)
+            XCTAssertEqual(editor.selectedRange(),committedSelection); XCTAssertEqual(editor.string,prefix + "中文🙂")
+            editor.delegate = nil
+        }
+    }
+
+    @MainActor func testDocumentEchoPreservesTypingStyleSelectionAndAcceptsExternalEdit() throws {
+        var saved: (String,Data?)?
+        let parent = DetailDocumentEditor(text: "",data: nil,rich: true,controller: DocumentEditorController(),height: .constant(26)) { text,data in saved = (text,data) }
+        let view = DocumentScrollView(frame: NSRect(x: 0,y: 0,width: 300,height: 26))
+        let editor = DocumentTextView(frame: view.bounds); view.documentView = editor; parent.populate(editor)
+        let coordinator = DetailDocumentEditor.Coordinator(parent: parent); coordinator.attach(editor)
+        editor.insertText("## ",replacementRange: editor.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification,object: editor))
+        XCTAssertEqual(editor.string,""); XCTAssertEqual((editor.typingAttributes[.font] as? NSFont)?.pointSize,20)
+        // SwiftUI can redraw the previous model during a height/toolbar update.
+        coordinator.synchronize(view)
+        XCTAssertEqual((editor.typingAttributes[.font] as? NSFont)?.pointSize,20)
+        editor.insertText("标题🙂中文",replacementRange: editor.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification,object: editor))
+        coordinator.synchronize(view)
+        XCTAssertEqual((editor.typingAttributes[.font] as? NSFont)?.pointSize,20)
+        let committed = try XCTUnwrap(saved)
+        editor.setSelectedRange(NSRange(location: 2,length: 2))
+        var echoed = parent; echoed.text = committed.0; echoed.data = committed.1; coordinator.parent = echoed
+        coordinator.synchronize(view)
+        XCTAssertEqual(editor.selectedRange(),NSRange(location: 2,length: 2)); XCTAssertEqual(editor.string,"标题🙂中文")
+        // A real model edit (e.g. restoring history) still updates the editor.
+        var external = parent; external.text = "短"; external.data = nil; coordinator.parent = external
+        coordinator.synchronize(view)
+        XCTAssertEqual(editor.string,"短"); XCTAssertEqual(editor.selectedRange(),NSRange(location: 1,length: 0))
+        XCTAssertEqual(saved!.0,"标题🙂中文")
+        editor.delegate = nil
+    }
+
+    @MainActor func testUnmarkCommitsWithoutSavingCandidatesAndCancellationKeepsContent() async {
+        var saved: [String] = []
+        let parent = DetailDocumentEditor(text: "原文",data: nil,rich: true,controller: DocumentEditorController(),height: .constant(26)) { text,_ in saved.append(text) }
+        let editor = DocumentTextView(); parent.populate(editor)
+        let coordinator = DetailDocumentEditor.Coordinator(parent: parent); coordinator.attach(editor)
+        editor.setSelectedRange(NSRange(location: 2,length: 0))
+        editor.setMarkedText("候选",selectedRange: NSRange(location: 2,length: 0),replacementRange: editor.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification,object: editor))
+        XCTAssertTrue(saved.isEmpty)
+        // Cancelling the marked insertion must not change the committed model.
+        editor.setMarkedText("",selectedRange: NSRange(location: 0,length: 0),replacementRange: NSRange(location: NSNotFound,length: 0))
+        editor.unmarkText()
+        let cancelled = expectation(description: "cancel processed")
+        DispatchQueue.main.async { cancelled.fulfill() }
+        await fulfillment(of: [cancelled],timeout: 2)
+        XCTAssertEqual(editor.string,"原文"); XCTAssertTrue(saved.isEmpty)
+        editor.setMarkedText("确认",selectedRange: NSRange(location: 2,length: 0),replacementRange: editor.selectedRange())
+        editor.unmarkText()
+        let committed = expectation(description: "unmark processed")
+        DispatchQueue.main.async { committed.fulfill() }
+        await fulfillment(of: [committed],timeout: 2)
+        XCTAssertEqual(saved,["原文确认"])
+        editor.delegate = nil
+    }
+
+    @MainActor func testCursorMovementDoesNotRewriteExistingMarkdown() async {
+        let original = "保留 **原始符号🙂**"
+        var saved: [String] = []
+        let parent = DetailDocumentEditor(text: original,data: nil,rich: true,controller: DocumentEditorController(),height: .constant(26)) { text,_ in saved.append(text) }
+        let editor = DocumentTextView(); parent.populate(editor)
+        let coordinator = DetailDocumentEditor.Coordinator(parent: parent); coordinator.attach(editor)
+        editor.setSelectedRange(NSRange(location: original.utf16.count,length: 0))
+        coordinator.textViewDidChangeSelection(Notification(name: NSTextView.didChangeSelectionNotification,object: editor))
+        let moved = expectation(description: "selection callbacks processed")
+        DispatchQueue.main.async { moved.fulfill() }
+        await fulfillment(of: [moved],timeout: 2)
+        XCTAssertEqual(editor.string,original); XCTAssertTrue(saved.isEmpty)
+        editor.delegate = nil
+    }
+
+    @MainActor func testChineseCompositionInCodeBlockKeepsLiteralMarkdown() {
+        var saved: [String] = []
+        let parent = DetailDocumentEditor(text: "",data: nil,rich: true,controller: DocumentEditorController(),height: .constant(26)) { text,_ in saved.append(text) }
+        let editor = DocumentTextView(); parent.populate(editor)
+        let coordinator = DetailDocumentEditor.Coordinator(parent: parent); coordinator.attach(editor)
+        editor.typingAttributes = MarkdownTyping.codeBlockAttributes
+        editor.setMarkedText("zhongwen",selectedRange: NSRange(location: 8,length: 0),replacementRange: editor.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification,object: editor))
+        XCTAssertTrue(saved.isEmpty)
+        editor.insertText("**中文🙂**",replacementRange: NSRange(location: NSNotFound,length: 0))
+        XCTAssertEqual(editor.string,"**中文🙂**"); XCTAssertEqual(saved,["**中文🙂**"])
+        XCTAssertTrue(MarkdownTyping.isCodeBlock(editor.typingAttributes))
+        editor.delegate = nil
+    }
+
+    @MainActor func testLegacyRichEditorKeepsCompositionAcrossRefresh() {
+        var saved: [String] = []
+        let parent = RichTextEditor(text: "正文：",data: nil) { text,_ in saved.append(text) }
+        let view = NSScrollView(); let editor = DocumentTextView(); view.documentView = editor; parent.populate(editor)
+        let coordinator = RichTextEditor.Coordinator(parent: parent); coordinator.attach(editor)
+        editor.setSelectedRange(NSRange(location: editor.string.utf16.count,length: 0))
+        editor.setMarkedText("ceshi",selectedRange: NSRange(location: 5,length: 0),replacementRange: editor.selectedRange())
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification,object: editor))
+        coordinator.synchronize(view)
+        XCTAssertTrue(editor.hasMarkedText()); XCTAssertTrue(saved.isEmpty)
+        editor.insertText("测试",replacementRange: NSRange(location: NSNotFound,length: 0))
+        XCTAssertEqual(editor.string,"正文：测试"); XCTAssertEqual(saved,["正文：测试"])
+        editor.delegate = nil
+    }
+
     @MainActor private func documentImage() throws -> Data {
         let image = NSImage(size: NSSize(width: 360,height: 120)); image.lockFocus()
         NSColor.systemBlue.setFill(); NSBezierPath(roundedRect: NSRect(x: 0,y: 0,width: 360,height: 120),xRadius: 12,yRadius: 12).fill()

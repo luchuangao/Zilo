@@ -98,7 +98,7 @@ struct ImportPreview { var backup: Backup; var warnings: [String]; var source: S
 enum ImportService {
     static func preview(_ url: URL) throws -> ImportPreview {
         let data = try Data(contentsOf: url)
-        if let backup = try? JSONDecoder().decode(Backup.self,from: data) { guard backup.formatVersion == 1 else { throw ServiceError.message("不支持的备份版本") }; return ImportPreview(backup: backup,warnings: [],source: "知行清单备份") }
+        if let backup = try? JSONDecoder().decode(Backup.self,from: data) { guard backup.formatVersion == 1 else { throw ServiceError.message("不支持的备份版本") }; return ImportPreview(backup: backup,warnings: [],source: "Zilo备份") }
         guard let text = String(data: data,encoding: .utf8) else { throw ServiceError.message("请提供 UTF-8 CSV 或本工具 JSON 备份") }
         let allRows = CSV.parse(text); guard let headerIndex = allRows.firstIndex(where: { row in row.contains { ["title","task name","任务名称","标题"].contains($0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: "\u{feff}",with: "")) } }) else { throw ServiceError.message("找不到任务标题表头") }; let rows = Array(allRows.dropFirst(headerIndex)); let headers = rows[0]
         let names = headers.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().replacingOccurrences(of: "\u{feff}",with: "") }

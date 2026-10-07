@@ -444,7 +444,7 @@ struct ImportView: View {
     @EnvironmentObject var store: Store; @Environment(\.dismiss) var dismiss; var preview: ImportPreview; @State private var result: String?; @State private var replace = false
     var duplicates: Int { preview.backup.tasks.filter { incoming in store.tasks.contains { $0.id == incoming.id || (incoming.sourceID != nil && $0.sourceID == incoming.sourceID) } }.count }
     var body: some View { VStack(alignment: .leading,spacing: 16) { Text("导入预览").font(.title2.bold()); Text("\(preview.source) · \(preview.count) 条任务 · \(preview.backup.lists.count) 个清单 · \(duplicates) 条重复")
-        if preview.source == "知行清单备份" { Toggle("恢复备份并替换当前数据",isOn: $replace); Text("默认合并；替换会把当前备份中不存在的记录移入回收站。").font(.caption).foregroundStyle(.secondary) }
+        if preview.source == "Zilo备份" { Toggle("恢复备份并替换当前数据",isOn: $replace); Text("默认合并；替换会把当前备份中不存在的记录移入回收站。").font(.caption).foregroundStyle(.secondary) }
         ScrollView { VStack(alignment: .leading,spacing: 10) { ForEach(preview.warnings,id: \.self) { Label($0,systemImage: "exclamationmark.triangle").foregroundStyle(.orange) }; ForEach(preview.backup.tasks.prefix(50)) { t in HStack { Text(t.title); Spacer(); if let due = t.due { Text(due,format: .dateTime.year().month().day()).foregroundStyle(.secondary) } } }; if preview.count > 50 { Text("其余 \(preview.count - 50) 条任务也将导入").foregroundStyle(.secondary) } } }
         if let result { Text(result).foregroundStyle(.green) }; HStack { Button(result == nil ? "取消" : "关闭") { dismiss() }; Spacer(); Button("确认导入") { performImport() }.buttonStyle(.borderedProminent).disabled(result != nil) }
     }.padding(24).frame(width: 650,height: 520) }
