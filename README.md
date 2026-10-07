@@ -111,3 +111,8 @@ ownlist://task?id=任务UUID
 正式名称为「知行清单」。主窗口、菜单栏、关于、小组件、系统分享入口及手动备份文件名统一更新。本仓库提供应用源码，不包含已签名的应用安装包。应用标识、同步容器、数据目录、URL Scheme 和备份格式继续沿用，已有任务及备份兼容。
 
 新 Logo 已用于应用图标、侧栏品牌标记和关于页。图标资源为 Resources/AppIcon-zhixing.icns，透明原图为 Resources/Logo-zhixing.png。本轮正式应用完成 Developer ID 签名及 Apple 公证。
+
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
