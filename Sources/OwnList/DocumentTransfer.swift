@@ -148,7 +148,7 @@ enum MarkdownDocument {
         (try? NSRegularExpression(pattern: pattern))?.firstMatch(in: text, range: NSRange(location: 0, length: text.utf16.count))
     }
     struct ExportResult { let text: String; let images: [(String, Data)] }
-    static func export(_ content: NSAttributedString, assets: String) -> ExportResult {
+    static func export(_ content: NSAttributedString, assets: String, inlineImages: Bool = false) -> ExportResult {
         let maxTicks = content.string.components(separatedBy: "\n").map { $0.prefix { $0 == "`" }.count }.max() ?? 0
         let codeFence = String(repeating: "`", count: max(3, maxTicks + 1))
         let source = content.string as NSString; var result = ""; var images: [(String, Data)] = []; var location = 0; var inCode = false
@@ -164,7 +164,9 @@ enum MarkdownDocument {
             var line = ""
             paragraph.enumerateAttributes(in: NSRange(location: 0, length: paragraph.length)) { attrs, run, _ in
                 if let attachment = attrs[.attachment] as? NSTextAttachment, let data = RichDocument.imageData(attachment) {
-                    let name = "image-\(images.count + 1).png"; images.append((name, data)); line += "![图片](<\(assets)/\(name)>)"; return
+                    if inlineImages { line += "![图片](data:image/png;base64,\(data.base64EncodedString()))" }
+                    else { let name = "image-\(images.count + 1).png"; images.append((name, data)); line += "![图片](<\(assets)/\(name)>)" }
+                    return
                 }
                 var text = (paragraph.string as NSString).substring(with: run)
                 let newline = text.hasSuffix("\n"); if newline { text.removeLast() }
@@ -191,6 +193,25 @@ enum MarkdownDocument {
     }
 }
 
+/// Switching modes converts the document once; ordinary Markdown edits keep
+/// the exact source, including whitespace, fences and incomplete syntax.
+enum TaskDocument {
+    static func switchMode(_ task: inout TaskItem, to mode: DocumentEditingMode) {
+        guard task.editingMode != mode else { return }
+        if mode == .markdown {
+            if let content = task.richText.flatMap(RichDocument.decode) {
+                task.notes = MarkdownDocument.export(content,assets: "",inlineImages: true).text
+            }
+            task.richText = nil
+        } else {
+            let content = MarkdownDocument.parse(task.notes).content
+            task.notes = content.string
+            task.richText = RichDocument.encode(content)
+        }
+        task.documentMode = mode
+    }
+}
+
 enum DocumentExport {
     enum Format: String { case word = "docx", pdf = "pdf", markdown = "md" }
     static func content(task: TaskItem, children: [TaskItem]) -> NSAttributedString {
@@ -206,6 +227,14 @@ enum DocumentExport {
         switch format {
         case .word: try WordDocument.data(content).write(to: url, options: .atomic)
         case .markdown:
+            if task.editingMode == .markdown {
+                var source = "# " + task.title + "\n\n" + task.notes
+                for item in task.checks { source += "\n- [\(item.done ? "x" : " ")] \(item.title)" }
+                if !children.isEmpty { source += "\n\n## 子任务\n" }
+                for child in children { source += "- [\(child.completed ? "x" : " ")] \(child.title)\n" }
+                try source.write(to: url,atomically: true,encoding: .utf8)
+                return
+            }
             // Unique asset directory avoids overwriting images from a previous export.
             let assets = url.deletingPathExtension().lastPathComponent + ".assets-" + UUID().uuidString.prefix(8)
             let exported = MarkdownDocument.export(content, assets: assets)

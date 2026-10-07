@@ -12,8 +12,7 @@ struct TaskDetailView: View {
     @State private var showFormatting = false
     @State private var showChecks = false
     @State private var showChildren = false
-    @State private var previewMarkdown = false
-    @State private var editorMode = "富文本"
+    @AppStorage("markdownPreviewVisible") private var previewMarkdown = true
     @State private var bodyHeight: CGFloat = 26
     @State private var hoveredCheck: UUID?
     @State private var childTitle = ""
@@ -31,30 +30,14 @@ struct TaskDetailView: View {
     var body: some View {
         Group {
             if let task {
-                VStack(spacing: 0) {
-                    header(task)
-                    Divider()
-                    ScrollViewReader { reader in
-                        ScrollView {
-                            VStack(alignment: .leading,spacing: 12) {
-                                HStack(alignment: .top) {
-                                    TextField("任务标题",text: binding(\.title,default: ""),axis: .vertical)
-                                        .font(.system(size: 20,weight: .semibold)).textFieldStyle(.plain)
-                                    Button { beginEntry("check") } label: { Image(systemName: "checklist").font(.system(size: 16)) }
-                                        .help("添加检查项").accessibilityLabel("添加检查项").foregroundStyle(.secondary)
-                                }.padding(.bottom,6)
-                                documentBody(task)
-                                relatedItems(task)
-                                if !task.tags.isEmpty {
-                                    Button { showOrganization = true } label: { Label(task.tags.map { "#" + $0 }.joined(separator: "  "),systemImage: "tag").font(.callout).foregroundStyle(.secondary) }
-                                }
-                                if let parent = task.parentID { Button("返回父任务") { store.selectedTask = parent } }
-                            }.padding(.horizontal,24).padding(.top,22).padding(.bottom,24)
+                GeometryReader { geometry in
+                    HSplitView {
+                        detailContent(task,documentHeight: max(220,geometry.size.height - (showFormatting ? 270 : 225)))
+                            .frame(minWidth: 300,maxWidth: .infinity,maxHeight: .infinity)
+                        if task.editingMode == .markdown && previewMarkdown {
+                            previewPane(task).frame(minWidth: 220,idealWidth: 320,maxWidth: .infinity,maxHeight: .infinity)
                         }
-                        .onChange(of: focusedEntry) { _,entry in if let entry { reader.scrollTo(entry,anchor: .bottom) } }
-                    }.id(task.id)
-                    if showFormatting { formattingBar(task).padding(.horizontal,20).padding(.bottom,12) }
-                    footer(task)
+                    }
                 }
                 .buttonStyle(.plain)
                 .sheet(isPresented: $showHistory) { HistoryView(taskID: task.id).environmentObject(store) }
@@ -62,7 +45,7 @@ struct TaskDetailView: View {
             } else {
                 QuietEmptyState(title: "选择一个任务",message: "查看详细内容、安排时间或开始专注",symbol: "square.and.pencil")
             }
-        }.frame(maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
+        }.frame(minWidth: task?.editingMode == .markdown && previewMarkdown ? 540 : 340,maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
             .background(ListTheme.canvas)
             .onAppear(perform: resetEditor)
             .onChange(of: store.selectedTask) { _,_ in resetEditor() }
@@ -70,8 +53,66 @@ struct TaskDetailView: View {
     func resetEditor() {
         childTitle = ""; checkTitle = ""; focusedEntry = nil
         showDate = false; showOrganization = false; showChecks = false; showChildren = false; showLink = false
-        previewMarkdown = false; bodyHeight = 26; hoveredCheck = nil
-        editorMode = "富文本"
+        bodyHeight = 26; hoveredCheck = nil
+    }
+    func detailContent(_ task: TaskItem,documentHeight: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            header(task)
+            Divider()
+            ScrollViewReader { reader in
+                ScrollView {
+                    VStack(alignment: .leading,spacing: 12) {
+                        HStack(alignment: .top) {
+                            TextField("任务标题",text: binding(\.title,default: ""),axis: .vertical)
+                                .font(.system(size: 20,weight: .semibold)).textFieldStyle(.plain)
+                            Button { beginEntry("check") } label: { Image(systemName: "checklist").font(.system(size: 16)) }
+                                .help("添加检查项").accessibilityLabel("添加检查项").foregroundStyle(.secondary)
+                        }.padding(.bottom,6)
+                        documentControls(task)
+                        documentBody(task,height: documentHeight)
+                        relatedItems(task)
+                        if !task.tags.isEmpty {
+                            Button { showOrganization = true } label: { Label(task.tags.map { "#" + $0 }.joined(separator: "  "),systemImage: "tag").font(.callout).foregroundStyle(.secondary) }
+                        }
+                        if let parent = task.parentID { Button("返回父任务") { store.selectedTask = parent } }
+                    }.padding(.horizontal,24).padding(.top,22).padding(.bottom,24)
+                }
+                .onChange(of: focusedEntry) { _,entry in if let entry { reader.scrollTo(entry,anchor: .bottom) } }
+            }.id(task.id)
+            if showFormatting { formattingBar(task).padding(.horizontal,20).padding(.bottom,12) }
+            footer(task)
+        }
+    }
+    func documentControls(_ task: TaskItem) -> some View {
+        HStack(spacing: 8) {
+            Picker("正文编辑方式",selection: Binding(get: { task.editingMode },set: { changeMode($0) })) {
+                ForEach(DocumentEditingMode.allCases,id: \.self) { mode in Text(mode.title).tag(mode) }
+            }.pickerStyle(.segmented).labelsHidden().frame(width: 180).accessibilityLabel("正文编辑方式")
+            Spacer(minLength: 4)
+            if task.editingMode == .markdown {
+                Button { previewMarkdown.toggle() } label: { Image(systemName: "rectangle.split.2x1").foregroundStyle(previewMarkdown ? Color.accentColor : .secondary) }
+                    .help(previewMarkdown ? "关闭右侧预览" : "打开右侧预览").accessibilityLabel(previewMarkdown ? "关闭右侧预览" : "打开右侧预览")
+            }
+        }.padding(.bottom,4)
+    }
+    func changeMode(_ mode: DocumentEditingMode) {
+        guard let id = task?.id, task?.editingMode != mode else { return }
+        document.editor?.unmarkText(); document.editor?.didChangeText()
+        guard var current = store.tasks.first(where: { $0.id == id }) else { return }
+        TaskDocument.switchMode(&current,to: mode)
+        store.save(current)
+        document.activeFormats = []
+    }
+    func previewPane(_ task: TaskItem) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Label("Markdown 预览",systemImage: "doc.richtext").font(.system(size: 13,weight: .medium))
+                Spacer()
+                Button { previewMarkdown = false } label: { Image(systemName: "xmark").font(.system(size: 11)) }.accessibilityLabel("关闭右侧预览")
+            }.foregroundStyle(.secondary).padding(.horizontal,18).frame(height: 52)
+            Divider()
+            MarkdownPreviewView(source: task.notes).padding(20)
+        }.background(ListTheme.canvas)
     }
     func beginEntry(_ entry: String) {
         if entry == "check" { showChecks = true } else { showChildren = true }
@@ -95,11 +136,7 @@ struct TaskDetailView: View {
             }.menuStyle(.borderlessButton).menuIndicator(.hidden).tint(task.priority == 3 ? .red : task.priority == 2 ? .orange : task.priority == 1 ? .blue : .gray).fixedSize().help("优先级").accessibilityLabel("优先级")
         }.padding(.horizontal,24).frame(height: 52)
     }
-    @ViewBuilder func documentBody(_ task: TaskItem) -> some View {
-        if previewMarkdown {
-            DetailDocumentEditor(text: task.notes,data: task.richText ?? RichDocument.encode(MarkdownDocument.parse(task.notes).content),rich: true,editable: false,controller: document,height: $bodyHeight) { _,_ in }
-                .frame(height: bodyHeight)
-        } else {
+    @ViewBuilder func documentBody(_ task: TaskItem,height: CGFloat) -> some View {
             HStack(alignment: .top,spacing: 6) {
                 Menu {
                     Button("检查项",systemImage: "checklist") { beginEntry("check") }
@@ -113,13 +150,12 @@ struct TaskDetailView: View {
                     }
                 } label: { Image(systemName: "plus").foregroundStyle(.tertiary).frame(width: 14,height: 24) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.gray).fixedSize().help("插入内容").accessibilityLabel("插入内容")
-                DetailDocumentEditor(text: task.notes,data: task.richText,rich: editorMode == "富文本",onError: { store.error = $0 },controller: document,height: $bodyHeight) { text,data in
+                DetailDocumentEditor(text: task.notes,data: task.richText,rich: task.editingMode == .richText,scrolling: true,onError: { store.error = $0 },controller: document,height: $bodyHeight) { text,data in
                     store.mutate(task.id) { $0.notes = text; $0.richText = data }
-                }.frame(height: bodyHeight).overlay(alignment: .topLeading) {
-                    if task.notes.isEmpty { Text("输入内容，支持 Markdown…").font(.system(size: 14)).foregroundStyle(.tertiary).padding(.top,3).allowsHitTesting(false) }
+                }.id(task.editingMode).frame(height: height).overlay(alignment: .topLeading) {
+                    if task.notes.isEmpty { Text(task.editingMode == .markdown ? "输入 Markdown 源码…" : "输入内容，支持 Markdown 快捷语法…").font(.system(size: 14)).foregroundStyle(.tertiary).padding(.top,3).allowsHitTesting(false) }
                 }
             }.padding(.leading,-20)
-        }
     }
     @ViewBuilder func relatedItems(_ task: TaskItem) -> some View {
         if !task.checks.isEmpty || showChecks {
@@ -216,7 +252,7 @@ struct TaskDetailView: View {
             } label: { HStack(spacing: 6) { Image(systemName: "tray.and.arrow.down"); Text(store.lists.first { $0.id == task.listID }?.name ?? "收集箱").lineLimit(1) } }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.primary).fixedSize().accessibilityLabel("所属清单")
             Spacer()
-            Button { showFormatting.toggle(); previewMarkdown = false } label: { Text("A").font(.system(size: 18)).underline().frame(width: 28,height: 28).background(showFormatting ? Color.secondary.opacity(0.1) : .clear,in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel("格式工具栏").help("格式工具栏")
+            Button { showFormatting.toggle() } label: { Text("A").font(.system(size: 18)).underline().frame(width: 28,height: 28).background(showFormatting ? Color.secondary.opacity(0.1) : .clear,in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel("格式工具栏").help("格式工具栏")
             Menu { moreActions(task) } label: { Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 28,height: 28) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.primary).fixedSize().accessibilityLabel("任务更多操作").help("任务更多操作")
         }.foregroundStyle(.secondary).padding(.horizontal,24).padding(.vertical,12)
@@ -243,13 +279,14 @@ struct TaskDetailView: View {
         Button { attach(task) } label: { Image(systemName: "paperclip").frame(width: 28,height: 28) }.help("上传附件").accessibilityLabel("上传附件")
         Button { insertImages() } label: { Image(systemName: "photo").frame(width: 28,height: 28) }.help("插入图片").accessibilityLabel("插入图片")
         Menu {
-            Picker("编辑方式",selection: Binding(get: { editorMode },set: { editorMode = $0 })) { Text("Markdown（纯文本）").tag("Markdown").disabled(task.richText.flatMap(RichDocument.decode).map(RichDocument.hasImages) ?? false); Text("直接编辑（支持 Markdown）").tag("富文本") }
-            Toggle("预览内容",isOn: $previewMarkdown)
-            if editorMode == "富文本" { Button("字体设置") { document.editor?.window?.makeFirstResponder(document.editor); NSFontManager.shared.orderFrontFontPanel(nil) } }
+            Picker("正文编辑方式",selection: Binding(get: { task.editingMode },set: { changeMode($0) })) {
+                ForEach(DocumentEditingMode.allCases,id: \.self) { mode in Text(mode.title).tag(mode) }
+            }
+            if task.editingMode == .markdown { Toggle("右侧预览",isOn: $previewMarkdown) }
+            if task.editingMode == .richText { Button("字体设置") { document.editor?.window?.makeFirstResponder(document.editor); NSFontManager.shared.orderFrontFontPanel(nil) } }
         } label: { Image(systemName: "slider.horizontal.3").frame(width: 28,height: 28) }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("编辑设置").accessibilityLabel("编辑设置")
     }
     func applyFormat(_ format: DocumentFormat) {
-        guard !previewMarkdown else { previewMarkdown = false; return }
         if format == .link { linkTitle = document.selectedText; linkAddress = ""; showLink = true }
         else { document.apply(format) }
     }
@@ -308,12 +345,10 @@ struct TaskDetailView: View {
     }
     func attach(_ task: TaskItem) { let panel = NSOpenPanel(); panel.allowsMultipleSelection = true; if panel.runModal() == .OK { store.attach(panel.urls,to: task.id) } }
     func insertImages() {
-        previewMarkdown = false; editorMode = "富文本"
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.image]; panel.allowsMultipleSelection = true; panel.message = "选择要插入正文的图片"
         if panel.runModal() == .OK { do { try document.insertImages(panel.urls) } catch { store.error = error.localizedDescription } }
     }
     func insertMarkdown() {
-        previewMarkdown = false
         let panel = NSOpenPanel(); panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText,UTType(filenameExtension: "markdown") ?? .plainText]; panel.allowsMultipleSelection = true; panel.message = "将 Markdown 文件内容插入当前正文"
         if panel.runModal() == .OK {
             do { let warnings = try document.insertMarkdown(panel.urls); if !warnings.isEmpty { store.error = warnings.joined(separator: "\n") } }

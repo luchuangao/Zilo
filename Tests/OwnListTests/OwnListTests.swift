@@ -4,6 +4,117 @@ import PDFKit
 @testable import OwnList
 
 final class OwnListTests: XCTestCase {
+    @MainActor func testFittedLayoutIncludesTrailingEmptyLineAndReportsOnlyChanges() throws {
+        let view = DocumentScrollView(frame: NSRect(x: 0,y: 0,width: 400,height: 200))
+        let editor = DocumentTextView(frame: view.bounds)
+        editor.isVerticallyResizable = true; editor.textContainerInset = NSSize(width: 0,height: 3)
+        editor.textContainer?.lineFragmentPadding = 0; view.documentView = editor
+        editor.textStorage?.setAttributedString(NSAttributedString(string: "第一行",attributes: MarkdownTyping.bodyAttributes))
+        var heights: [CGFloat] = []; view.onHeight = { heights.append($0) }
+        view.layout(); let oneLine = try XCTUnwrap(heights.last)
+        for _ in 0..<5 { view.layout() }
+        XCTAssertEqual(heights.count,1,"相同布局不能反复向 SwiftUI 报告高度")
+        editor.insertText("\n",replacementRange: NSRange(location: editor.string.utf16.count,length: 0))
+        view.layout(); let twoLines = try XCTUnwrap(heights.last)
+        XCTAssertGreaterThan(twoLines,oneLine + 10,"最后一个空行也要留出光标空间")
+        for _ in 0..<5 { view.layout() }
+        XCTAssertEqual(heights.count,2)
+    }
+
+    @MainActor func testFixedDocumentViewportDoesNotResizeAfterReturns() {
+        let view = DocumentScrollView(frame: NSRect(x: 0,y: 0,width: 340,height: 180))
+        view.fitsContent = false
+        let editor = DocumentTextView(frame: view.bounds)
+        editor.isVerticallyResizable = true; editor.isRichText = false
+        editor.textContainerInset = NSSize(width: 0,height: 3); view.documentView = editor
+        editor.typingAttributes = MarkdownTyping.bodyAttributes
+        var reports = 0; view.onHeight = { _ in reports += 1 }
+        let viewport = view.frame
+        for _ in 0..<60 {
+            editor.insertText("中文🙂\n",replacementRange: NSRange(location: editor.string.utf16.count,length: 0))
+            view.layout()
+            XCTAssertEqual(view.frame,viewport)
+            XCTAssertGreaterThanOrEqual(editor.frame.height,view.contentSize.height)
+        }
+        XCTAssertEqual(reports,0,"连续回车不能再改变外层正文高度")
+        XCTAssertGreaterThan(editor.frame.height,view.frame.height)
+    }
+
+    @MainActor func testMarkdownModePreservesExactSourceAndExport() throws {
+        let source = "# 中文🙂\n\n- 项目\n\n```swift\n\tlet value = \"**原样**\"\n\n```\n\n尚未完成 **"
+        var task = TaskItem(); task.title = "源码"; task.documentMode = .markdown; task.notes = source
+        let editor = DocumentTextView()
+        var saved: (String,Data?)?
+        let parent = DetailDocumentEditor(text: source,data: nil,rich: false,scrolling: true,controller: DocumentEditorController(),height: .constant(200)) { text,data in saved = (text,data) }
+        parent.populate(editor); let coordinator = DetailDocumentEditor.Coordinator(parent: parent); coordinator.attach(editor)
+        editor.insertText("\n",replacementRange: NSRange(location: source.utf16.count,length: 0))
+        coordinator.textDidChange(Notification(name: NSText.didChangeNotification,object: editor))
+        XCTAssertEqual(saved?.0,source + "\n"); XCTAssertNil(saved?.1)
+        XCTAssertFalse(coordinator.textView(editor,doCommandBy: #selector(NSResponder.insertNewline(_:))))
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder,withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: folder) }
+        let output = folder.appendingPathComponent("source.md")
+        try DocumentExport.write(task: task,children: [],format: .markdown,to: output)
+        XCTAssertEqual(try String(contentsOf: output,encoding: .utf8),"# 源码\n\n" + source)
+        editor.delegate = nil
+    }
+
+    @MainActor func testModeSwitchPreservesCodeAndEmbeddedImage() throws {
+        let body = NSMutableAttributedString(attributedString: MarkdownDocument.parse("# 标题\n\n**加粗**\n```\n\tlet x = \"中文🙂\"\n```\n").content)
+        body.append(try RichDocument.image(documentImage()))
+        var task = TaskItem(); task.notes = body.string; task.richText = RichDocument.encode(body)
+        TaskDocument.switchMode(&task,to: .markdown)
+        XCTAssertEqual(task.editingMode,.markdown); XCTAssertNil(task.richText)
+        XCTAssertTrue(task.notes.contains("# 标题")); XCTAssertTrue(task.notes.contains("**加粗**"))
+        XCTAssertTrue(task.notes.contains("\tlet x = \"中文🙂\"")); XCTAssertTrue(task.notes.contains("data:image/png;base64,"))
+        let source = task.notes; TaskDocument.switchMode(&task,to: .markdown); XCTAssertEqual(task.notes,source)
+        TaskDocument.switchMode(&task,to: .richText)
+        let restored = try XCTUnwrap(task.richText.flatMap(RichDocument.decode))
+        XCTAssertTrue(restored.string.contains("标题")); XCTAssertTrue(restored.string.contains("\tlet x = \"中文🙂\""))
+        XCTAssertTrue(RichDocument.hasImages(restored))
+    }
+
+    @MainActor func testDocumentModePersistenceAndLegacyBackup() throws {
+        let persistence = Persistence(inMemory: true); defer { try? FileManager.default.removeItem(at: persistence.root) }
+        var task = TaskItem(); task.documentMode = .markdown; task.notes = "# 原始源码\n\n```\ncode\n```"
+        try persistence.save(task)
+        let loaded = try XCTUnwrap(persistence.load(TaskItem.self).first)
+        XCTAssertEqual(loaded.editingMode,.markdown); XCTAssertEqual(loaded.notes,task.notes)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(task)) as? [String: Any])
+        json.removeValue(forKey: "documentMode")
+        let legacy = try JSONDecoder().decode(TaskItem.self,from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(legacy.editingMode,.richText)
+    }
+
+    @MainActor func testMarkdownFileAndImageInsertionKeepSource() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder,withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: folder) }
+        let source = "# 文件标题\n\n```swift\n\tlet x = 1\n```\n"
+        let file = folder.appendingPathComponent("input.md"); try source.write(to: file,atomically: true,encoding: .utf8)
+        let editor = DocumentTextView(); editor.isRichText = false
+        let controller = DocumentEditorController(); controller.editor = editor; controller.rich = false
+        XCTAssertTrue(try controller.insertMarkdown([file]).isEmpty)
+        XCTAssertEqual(editor.string,source)
+        try editor.insertImage(documentImage())
+        XCTAssertTrue(editor.string.hasPrefix(source)); XCTAssertTrue(editor.string.contains("data:image/png;base64,"))
+        XCTAssertTrue(RichDocument.hasImages(MarkdownDocument.parse(editor.string).content))
+    }
+
+    @MainActor func testPreviewUpdatesIndependentlyAndRetainsScroll() throws {
+        let view = DocumentScrollView(frame: NSRect(x: 0,y: 0,width: 300,height: 160)); view.fitsContent = false
+        let preview = DocumentTextView(frame: view.bounds); preview.isRichText = true; preview.isEditable = false
+        preview.isVerticallyResizable = true; view.documentView = preview
+        let coordinator = MarkdownPreviewView.Coordinator()
+        let source = "# 预览标题\n" + String(repeating: "正文 **粗体**\n",count: 60)
+        coordinator.render(source,in: view)
+        XCTAssertTrue(preview.string.hasPrefix("预览标题\n")); XCTAssertFalse(preview.string.contains("**"))
+        view.contentView.scroll(to: NSPoint(x: 0,y: 150)); let offset = view.contentView.bounds.origin
+        coordinator.render(source,in: view); XCTAssertEqual(view.contentView.bounds.origin,offset)
+        coordinator.render(source + "\n最新中文🙂",in: view)
+        XCTAssertTrue(preview.string.contains("最新中文🙂")); XCTAssertEqual(view.contentView.bounds.origin,offset)
+        XCTAssertFalse(preview.isEditable)
+    }
+
     @MainActor func testChineseCompositionDoesNotSaveUnconfirmedCandidates() {
         let editor = DocumentTextView()
         editor.isRichText = true

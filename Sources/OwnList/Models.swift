@@ -1,10 +1,16 @@
 import Foundation
 
 protocol ListRecord: Codable, Identifiable where ID == UUID { var id: UUID { get }; var deleted: Bool { get set }; static var kind: String { get } }
+enum DocumentEditingMode: String, Codable, CaseIterable {
+    case richText, markdown
+    var title: String { self == .richText ? "富文本" : "Markdown" }
+}
 struct TaskItem: ListRecord, Hashable {
     static let kind = "task"
     var id = UUID(); var deleted = false
     var title = ""; var notes = ""; var richText: Data?; var listID: UUID?; var section = ""; var tags: [String] = []
+    var documentMode: DocumentEditingMode?
+    var editingMode: DocumentEditingMode { documentMode ?? .richText }
     var priority = 0; var starred = false; var completed = false; var completedAt: Date?
     var start: Date?; var due: Date?; var allDay = true; var duration: Double = 1800
     var reminders: [Double] = []; var repeatRule = RepeatRule(); var parentID: UUID?
