@@ -68,7 +68,6 @@ struct TaskDetailView: View {
                             Button { beginEntry("check") } label: { Image(systemName: "checklist").font(.system(size: 16)) }
                                 .help("添加检查项").accessibilityLabel("添加检查项").foregroundStyle(.secondary)
                         }.padding(.bottom,6)
-                        documentControls(task)
                         documentBody(task,height: documentHeight)
                         relatedItems(task)
                         if !task.tags.isEmpty {
@@ -82,18 +81,6 @@ struct TaskDetailView: View {
             if showFormatting { formattingBar(task).padding(.horizontal,20).padding(.bottom,12) }
             footer(task)
         }
-    }
-    func documentControls(_ task: TaskItem) -> some View {
-        HStack(spacing: 8) {
-            Picker("正文编辑方式",selection: Binding(get: { task.editingMode },set: { changeMode($0) })) {
-                ForEach(DocumentEditingMode.allCases,id: \.self) { mode in Text(mode.title).tag(mode) }
-            }.pickerStyle(.segmented).labelsHidden().frame(width: 180).accessibilityLabel("正文编辑方式")
-            Spacer(minLength: 4)
-            if task.editingMode == .markdown {
-                Button { previewMarkdown.toggle() } label: { Image(systemName: "rectangle.split.2x1").foregroundStyle(previewMarkdown ? Color.accentColor : .secondary) }
-                    .help(previewMarkdown ? "关闭右侧预览" : "打开右侧预览").accessibilityLabel(previewMarkdown ? "关闭右侧预览" : "打开右侧预览")
-            }
-        }.padding(.bottom,4)
     }
     func changeMode(_ mode: DocumentEditingMode) {
         guard let id = task?.id, task?.editingMode != mode else { return }
@@ -253,7 +240,7 @@ struct TaskDetailView: View {
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.primary).fixedSize().accessibilityLabel("所属清单")
             Spacer()
             Button { showFormatting.toggle() } label: { Text("A").font(.system(size: 18)).underline().frame(width: 28,height: 28).background(showFormatting ? Color.secondary.opacity(0.1) : .clear,in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel("格式工具栏").help("格式工具栏")
-            Menu { moreActions(task) } label: { Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 28,height: 28) }
+            Menu { moreActions(task) } label: { Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 32,height: 32).contentShape(Rectangle()) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.primary).fixedSize().accessibilityLabel("任务更多操作").help("任务更多操作")
         }.foregroundStyle(.secondary).padding(.horizontal,24).padding(.vertical,12)
             .popover(isPresented: $showOrganization) { organization(task).padding(20).frame(width: 340) }
@@ -278,13 +265,6 @@ struct TaskDetailView: View {
         Button { beginEntry("check") } label: { Image(systemName: "checklist").frame(width: 28,height: 28) }.help("添加检查项").accessibilityLabel("添加检查项")
         Button { attach(task) } label: { Image(systemName: "paperclip").frame(width: 28,height: 28) }.help("上传附件").accessibilityLabel("上传附件")
         Button { insertImages() } label: { Image(systemName: "photo").frame(width: 28,height: 28) }.help("插入图片").accessibilityLabel("插入图片")
-        Menu {
-            Picker("正文编辑方式",selection: Binding(get: { task.editingMode },set: { changeMode($0) })) {
-                ForEach(DocumentEditingMode.allCases,id: \.self) { mode in Text(mode.title).tag(mode) }
-            }
-            if task.editingMode == .markdown { Toggle("右侧预览",isOn: $previewMarkdown) }
-            if task.editingMode == .richText { Button("字体设置") { document.editor?.window?.makeFirstResponder(document.editor); NSFontManager.shared.orderFrontFontPanel(nil) } }
-        } label: { Image(systemName: "slider.horizontal.3").frame(width: 28,height: 28) }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("编辑设置").accessibilityLabel("编辑设置")
     }
     func applyFormat(_ format: DocumentFormat) {
         if format == .link { linkTitle = document.selectedText; linkAddress = ""; showLink = true }
@@ -303,6 +283,12 @@ struct TaskDetailView: View {
         }.padding(24).frame(width: 420)
     }
     @ViewBuilder func moreActions(_ task: TaskItem) -> some View {
+        Picker("正文编辑方式",selection: Binding(get: { task.editingMode },set: { changeMode($0) })) {
+            ForEach(DocumentEditingMode.allCases,id: \.self) { mode in Text(mode.title).tag(mode) }
+        }
+        if task.editingMode == .markdown { Toggle("右侧 Markdown 预览",isOn: $previewMarkdown) }
+        if task.editingMode == .richText { Button("字体设置") { document.editor?.window?.makeFirstResponder(document.editor); NSFontManager.shared.orderFrontFontPanel(nil) } }
+        Divider()
         Button("添加子任务",systemImage: "arrow.turn.down.right") { beginEntry("child") }
         Button("添加检查项",systemImage: "checklist") { beginEntry("check") }
         Button(task.starred ? "取消收藏" : "收藏任务",systemImage: "star") { store.mutate(task.id) { $0.starred.toggle() } }
@@ -325,7 +311,7 @@ struct TaskDetailView: View {
         Button("开始专注",systemImage: "timer") { focus.taskID = task.id; focus.start(); DesktopBridge.panel(title: "专注",view: FocusMiniView().environmentObject(focus),size: NSSize(width: 260,height: 180)) }
         Button(task.archived == true ? "取消归档" : "归档任务",systemImage: "archivebox") { store.mutate(task.id) { $0.archived = !($0.archived ?? false) } }
         Divider()
-        Button(task.deleted ? "恢复任务" : "移入回收站",systemImage: task.deleted ? "arrow.uturn.backward" : "trash",role: task.deleted ? nil : .destructive) { store.mutate(task.id) { $0.deleted.toggle() } }
+        Button(task.deleted ? "恢复任务" : "移入回收站",systemImage: task.deleted ? "arrow.uturn.backward" : "trash",role: task.deleted ? nil : .destructive) { if task.deleted { store.restoreTask(task.id) } else { store.mutate(task.id) { $0.deleted = true } } }
     }
     func organization(_ task: TaskItem) -> some View {
         VStack(alignment: .leading,spacing: 14) {

@@ -7,6 +7,8 @@ enum Module: String, CaseIterable { case tasks = "任务", calendar = "日历", 
 }
 struct ListEditorRequest: Identifiable { let id = UUID(); var existing: TaskList? }
 struct MainView: View {
+    @AppStorage("markdownPreviewVisible") private var previewMarkdown = true
+    var showingMarkdownPreview: Bool { detailsVisible && previewMarkdown && store.tasks.first { $0.id == store.selectedTask }?.editingMode == .markdown }
     @EnvironmentObject var store: Store
     @State private var module: Module = .tasks; @State private var selection = "today"; @State private var search = ""; @State private var viewMode = "列表"; @State private var sort = "手动"; @State private var showCompleted = true; @State private var parallel = false
     @State private var searchVisible = false; @FocusState private var searchFocused: Bool
@@ -46,15 +48,15 @@ struct MainView: View {
                             Spacer(minLength: 4)
                             Menu {
                                 Picker("视图",selection: $viewMode) { ForEach(["列表","看板","时间线"],id: \.self) { Text($0) } }
-                            } label: { HStack(spacing: 5) { Text(viewMode).font(.system(size: 12)); Image(systemName: "chevron.down").font(.system(size: 9,weight: .medium)) }.padding(.horizontal,8).frame(height: 28) }
+                            } label: { HStack(spacing: 5) { Text(viewMode).font(.system(size: 12)); Image(systemName: "chevron.down").font(.system(size: 9,weight: .medium)) }.padding(.horizontal,8).frame(height: 32).contentShape(Rectangle()) }
                                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().quietHover().foregroundStyle(ListTheme.secondary).tint(ListTheme.secondary).help("切换视图").accessibilityLabel("切换视图")
                             Menu {
-                                if let id = selectedListID, let list = store.lists.first(where: { $0.id == id }) { Button("编辑清单") { listEditorRequest = ListEditorRequest(existing: list) } }
+                                if let id = selectedListID, let list = store.lists.first(where: { $0.id == id }) { Button("编辑清单") { listEditorRequest = ListEditorRequest(existing: list) }; Button("删除清单",role: .destructive) { if store.deleteList(id) { selection = "trash" } }; Divider() }
                                 Picker("排序",selection: $sort) { ForEach(["手动","日期","优先级","标题","创建时间"],id: \.self) { Text($0) } }
                                 Button("搜索任务") { searchVisible.toggle() }
                                 Toggle("显示已完成",isOn: $showCompleted); Toggle("并列日历",isOn: $parallel); Toggle("任务详情",isOn: $detailsVisible)
                                 Button("桌面便签") { DesktopBridge.panel(title: title,view: StickyView(listID: selectedListID).environmentObject(store)) }
-                            } label: { Image(systemName: "ellipsis").font(.system(size: 17)).frame(width: 26,height: 28) }
+                            } label: { Image(systemName: "ellipsis").font(.system(size: 17)).frame(width: 32,height: 32).contentShape(Rectangle()) }
                                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().quietHover().foregroundStyle(ListTheme.secondary).tint(ListTheme.secondary).help("清单选项").accessibilityLabel("清单选项")
                         }.padding(.horizontal,20).frame(height: 52)
                         if searchVisible {
@@ -67,11 +69,11 @@ struct MainView: View {
                         TaskWorkspace(tasks: sortedTasks,viewMode: viewMode,showCompleted: showCompleted,listID: selectedListID,isTrash: selection == "trash",isTemplates: selection == "templates",sort: sort,creationContext: selection).id(selection)
                     }.frame(minWidth: 320,idealWidth: 380,maxWidth: detailsVisible ? max(320,(geometry.size.width - 65 - (sidebarVisible ? 220 : 0) - (parallel ? 310 : 0)) * 0.40) : .infinity,maxHeight: .infinity,alignment: .top)
                     if parallel { CalendarView(compact: true).frame(minWidth: 310,idealWidth: 380) }
-                    if detailsVisible { TaskDetailView().frame(minWidth: 340,idealWidth: 480,maxWidth: .infinity,maxHeight: .infinity) }
+                    if detailsVisible { TaskDetailView().frame(minWidth: showingMarkdownPreview ? 540 : 340,idealWidth: 480,maxWidth: .infinity,maxHeight: .infinity) }
                 }
             } else { Group { switch module { case .calendar: CalendarView(); case .matrix: MatrixView(); case .focus: FocusView(); case .habits: HabitsView(); case .stats: StatisticsView(); case .tasks: EmptyView() } }.frame(maxWidth: .infinity,maxHeight: .infinity) }
         }.frame(maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
-        }.background(ListTheme.canvas).foregroundStyle(ListTheme.text).font(.system(size: fontScale)).tint(accent.listColor).accentColor(accent.listColor).frame(minWidth: parallel ? 1240 : 1000,minHeight: 620)
+        }.background(ListTheme.canvas).foregroundStyle(ListTheme.text).font(.system(size: fontScale)).tint(accent.listColor).accentColor(accent.listColor).frame(minWidth: (parallel ? 1240 : 1000) + (showingMarkdownPreview ? 200 : 0),minHeight: 620)
             .onChange(of: selection) { _,_ in store.selectedTask = nil; search = ""; viewMode = store.lists.first { $0.id == selectedListID }?.defaultView ?? "列表" }
             .onChange(of: viewMode) { _,value in if let id = selectedListID, var list = store.lists.first(where: { $0.id == id }), list.defaultView != value { list.defaultView = value; store.save(list,undoable: false) } }
             .onChange(of: searchVisible) { _,visible in if visible { DispatchQueue.main.async { searchFocused = true } } else { search = "" } }
@@ -156,7 +158,7 @@ struct MainView: View {
         HStack {
             Text(title).font(.system(size: 11,weight: .medium)).foregroundStyle(ListTheme.secondary)
             Spacer()
-            Button(action: action) { Image(systemName: "plus").font(.system(size: 12)).foregroundStyle(ListTheme.secondary).frame(width: 24,height: 24) }
+            Button(action: action) { Image(systemName: "plus").font(.system(size: 12)).foregroundStyle(ListTheme.secondary).frame(width: 28,height: 28).contentShape(Rectangle()) }
                 .buttonStyle(.plain).quietHover().help("新建" + title).accessibilityLabel("新建" + title)
         }.padding(.leading,12).padding(.trailing,4).padding(.top,16).padding(.bottom,4)
     }
@@ -168,15 +170,15 @@ struct MainView: View {
                 Spacer(minLength: 4)
                 if let color { Circle().fill(color).frame(width: 7,height: 7) }
                 if count > 0 { Text("\(count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(ListTheme.secondary) }
-            }.padding(.horizontal,12).frame(minHeight: 36)
+            }.padding(.horizontal,12).frame(minHeight: 36).contentShape(Rectangle())
         }.buttonStyle(.plain).foregroundStyle(ListTheme.text).quietHover(selected: selection == key)
             .id(key).accessibilityAddTraits(selection == key ? .isSelected : [])
     }
-    func nav(_ text: String,_ icon: String,_ key: String) -> some View { sidebarChoice(text,icon,key,count: filtered(key).filter { !$0.completed }.count) }
+    func nav(_ text: String,_ icon: String,_ key: String) -> some View { sidebarChoice(text,icon,key,count: key == "trash" ? store.trashEntryCount : filtered(key).filter { !$0.completed }.count) }
     func listRow(_ list: TaskList) -> some View {
         let count = store.tasks.filter { $0.listID == list.id && !$0.deleted && !$0.completed && !$0.isTemplate && $0.archived != true && $0.parentID == nil }.count
         return sidebarChoice(list.name,"line.3.horizontal","list:" + list.id.uuidString,color: list.color.listColor,count: count)
-            .contextMenu { Button("编辑清单") { listEditorRequest = ListEditorRequest(existing: list) }; Button("删除清单",role: .destructive) { var l = list; l.deleted = true; store.save(l); for t in store.tasks.filter({ $0.listID == l.id }) { store.mutate(t.id) { $0.listID = nil } }; selection = "inbox" } }
+            .contextMenu { Button("编辑清单") { listEditorRequest = ListEditorRequest(existing: list) }; Button("删除清单",role: .destructive) { if store.deleteList(list.id) { selection = "trash" } } }
             .dropDestination(for: String.self) { values,_ in for value in values { if let id = UUID(uuidString: value) { store.mutate(id) { $0.listID = list.id } } }; return true }
     }
     var selectedListID: UUID? { selection.hasPrefix("list:") ? UUID(uuidString: String(selection.dropFirst(5))) : nil }
@@ -201,14 +203,32 @@ struct MainView: View {
 struct TaskWorkspace: View {
     @EnvironmentObject var store: Store; var tasks: [TaskItem]; var viewMode: String; var showCompleted: Bool; var listID: UUID?; var isTrash: Bool; var isTemplates: Bool; var sort: String; var creationContext = "all"
     @State private var input = ""; @State private var multi = Set<UUID>(); @State private var batchMode = false; @State private var completedExpanded = false; @State private var entrySection = ""; @FocusState private var inputFocused: Bool
-    var visible: [TaskItem] { tasks.filter { showCompleted || !$0.completed || isTrash } }
+    var trashLists: [TaskList] { isTrash ? store.lists.filter(\.deleted).sorted { $0.order < $1.order } : [] }
+    var visible: [TaskItem] { tasks.filter { task in
+        (showCompleted || !task.completed || isTrash) && !(isTrash && trashLists.contains { $0.id == task.trashedWithList })
+    } }
     var body: some View { VStack(spacing: 0) {
         if !isTrash && creationContext != "completed" && creationContext != "archived" { HStack { Image(systemName: "plus"); TextField(entryPlaceholder,text: $input).foregroundStyle(ListTheme.text).textFieldStyle(.plain).focused($inputFocused).onSubmit { addTask(section: entrySection) }; Button { batchMode.toggle(); multi = [] } label: { Image(systemName: batchMode ? "checkmark.circle.fill" : "checklist") }.buttonStyle(.plain).help("批量编辑") }.foregroundStyle(ListTheme.secondary).padding(.horizontal,12).frame(height: 40).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 9)).padding(.horizontal,20).padding(.top,6).padding(.bottom,16) }
         if batchMode && !multi.isEmpty { HStack { Text("已选 \(multi.count) 项"); Menu("移动") { Button("收集箱") { store.move(multi,to: nil) }; ForEach(store.lists.filter { !$0.deleted }) { l in Button(l.name) { store.move(multi,to: l.id) } } }; Menu("优先级") { ForEach(0...3,id: \.self) { p in Button("\(p)") { batch { $0.priority = p } } } }; Button("今天") { batch { $0.due = Calendar.current.startOfDay(for: Date()) } }; Button("完成") { let before = store.backup; for id in multi { store.complete(id) }; store.groupUndo(before) }; Button("删除",role: .destructive) { batch { $0.deleted = true }; multi = [] } }.font(.caption).padding(8) }
-        if visible.isEmpty && (viewMode != "列表" || (store.lists.first { $0.id == listID }?.sections.isEmpty ?? true)) { QuietEmptyState(title: isTrash ? "回收站为空" : "清单很清爽",message: "把想做的事情记下来，一件一件完成。",symbol: "checkmark.circle") }
-        else if viewMode == "看板" { ScrollView(.horizontal) { HStack(alignment: .top,spacing: 12) { ForEach(["待安排","进行中","已完成"],id: \.self) { column in VStack(alignment: .leading) { Text(column).font(.headline).padding(10); ForEach(visible.filter { column == "已完成" ? $0.completed : column == "进行中" ? !$0.completed && $0.start != nil : !$0.completed && $0.start == nil }) { t in row(t).padding(10).background(.background,in: RoundedRectangle(cornerRadius: 10)) }; Spacer() }.padding(8).frame(width: 260).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 10)).dropDestination(for: String.self) { values,_ in for raw in values { if let id = UUID(uuidString: raw) { store.mutate(id) { $0.completed = column == "已完成"; $0.completedAt = $0.completed ? Date() : nil; $0.start = column == "进行中" ? Date() : nil } } }; return true } } }.padding(20) } }
-        else if viewMode == "时间线" { TimelineViewContent(tasks: visible) }
+        if visible.isEmpty && trashLists.isEmpty && (viewMode != "列表" || (store.lists.first { $0.id == listID }?.sections.isEmpty ?? true)) { QuietEmptyState(title: isTrash ? "回收站为空" : "清单很清爽",message: "把想做的事情记下来，一件一件完成。",symbol: "checkmark.circle") }
+        else if viewMode == "看板" && !isTrash { ScrollView(.horizontal) { HStack(alignment: .top,spacing: 12) { ForEach(["待安排","进行中","已完成"],id: \.self) { column in VStack(alignment: .leading) { Text(column).font(.headline).padding(10); ForEach(visible.filter { column == "已完成" ? $0.completed : column == "进行中" ? !$0.completed && $0.start != nil : !$0.completed && $0.start == nil }) { t in row(t).padding(10).background(.background,in: RoundedRectangle(cornerRadius: 10)) }; Spacer() }.padding(8).frame(width: 260).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 10)).dropDestination(for: String.self) { values,_ in for raw in values { if let id = UUID(uuidString: raw) { store.mutate(id) { $0.completed = column == "已完成"; $0.completedAt = $0.completed ? Date() : nil; $0.start = column == "进行中" ? Date() : nil } } }; return true } } }.padding(20) } }
+        else if viewMode == "时间线" && !isTrash { TimelineViewContent(tasks: visible) }
         else { List {
+            if !trashLists.isEmpty {
+                Section("已删除的清单") {
+                    ForEach(trashLists) { list in
+                        HStack(spacing: 10) {
+                            Image(systemName: "list.bullet.rectangle").foregroundStyle(list.color.listColor)
+                            VStack(alignment: .leading,spacing: 4) {
+                                Text(list.name).fontWeight(.medium)
+                                Text((list.folder.isEmpty ? "" : list.folder + " · ") + "\(store.tasks.filter { $0.trashedWithList == list.id }.count) 个任务").font(.caption).foregroundStyle(ListTheme.secondary)
+                            }
+                            Spacer()
+                            Button("恢复清单") { store.restoreList(list.id) }.buttonStyle(.bordered).accessibilityLabel("恢复清单“" + list.name + "”")
+                        }.padding(.vertical,8).contextMenu { Button("恢复清单及任务") { store.restoreList(list.id) } }
+                    }
+                }
+            }
             let configured = store.lists.first { $0.id == listID }?.sections ?? []; let extras = Set(visible.filter { !$0.completed }.map(\.section)).subtracting(configured); let sections = (extras.contains("") ? [""] : []) + configured + extras.filter { !$0.isEmpty }.sorted()
             ForEach(sections,id: \.self) { section in
                 if section.isEmpty && configured.isEmpty {
@@ -255,7 +275,7 @@ struct TaskWorkspace: View {
         Button("打开详情") { store.selectedTask = t.id }; Button(t.starred ? "取消收藏" : "收藏") { store.mutate(t.id) { $0.starred.toggle() } }
         if t.isTemplate { Button("从模板创建任务") { store.duplicate(t.id) } }
         else { Button(t.archived == true ? "取消归档" : "归档") { store.mutate(t.id) { $0.archived = t.archived != true } }; Button("保存为模板") { store.duplicate(t.id,asTemplate: true) }; Button("复制") { store.duplicate(t.id) } }
-        if t.deleted { Button("恢复") { store.mutate(t.id) { $0.deleted = false } } } else { Button("移入回收站",role: .destructive) { store.mutate(t.id) { $0.deleted = true } } }
+        if t.deleted { Button("恢复") { store.restoreTask(t.id) } } else { Button("移入回收站",role: .destructive) { store.mutate(t.id) { $0.deleted = true } } }
     } }
 }
 struct TimelineViewContent: View {

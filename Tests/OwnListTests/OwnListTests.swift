@@ -4,6 +4,86 @@ import PDFKit
 @testable import OwnList
 
 final class OwnListTests: XCTestCase {
+    @MainActor func testDeletedListRestoresContentsAndSupportsUndoRedo() throws {
+        let store = Store(persistence: Persistence(inMemory: true))
+        let list = try store.commitList(existing: nil,name: "项目",folder: "工作",color: "green",sections: "计划,完成",defaultView: "看板")
+        let id = try XCTUnwrap(store.add("说明",listID: list.id))
+        store.mutate(id) { $0.notes = "正文"; $0.completed = true; $0.tags = ["重要"]; $0.checks = [CheckItem(title: "检查")]; $0.documentMode = .markdown; $0.attachments = [Attachment(name: "图",relativePath: "Attachments/image.png")] }
+        let child = try XCTUnwrap(store.add("子任务",listID: list.id,parentID: id))
+        let original = store.tasks.first { $0.id == id }!
+        XCTAssertTrue(store.deleteList(list.id))
+        store.reload()
+        XCTAssertEqual(store.trashEntryCount,1,"整份清单算一项，不重复计算随清单删除的任务")
+        XCTAssertTrue(store.lists.first { $0.id == list.id }!.deleted)
+        for task in store.tasks { XCTAssertTrue(task.deleted); XCTAssertEqual(task.listID,list.id); XCTAssertEqual(task.trashedWithList,list.id) }
+        store.undo(); XCTAssertFalse(store.lists.first { $0.id == list.id }!.deleted)
+        XCTAssertEqual(store.tasks.first { $0.id == id },original)
+        store.redo(); XCTAssertTrue(store.lists.first { $0.id == list.id }!.deleted)
+        XCTAssertTrue(store.restoreList(list.id)); store.reload()
+        XCTAssertEqual(store.tasks.first { $0.id == id },original)
+        XCTAssertFalse(store.tasks.first { $0.id == child }!.deleted)
+        XCTAssertEqual(store.lists.first { $0.id == list.id },list)
+        store.undo(); XCTAssertTrue(store.lists.first { $0.id == list.id }!.deleted)
+        store.redo(); XCTAssertFalse(store.lists.first { $0.id == list.id }!.deleted)
+    }
+    @MainActor func testRestoringListDoesNotRevivePreviouslyDeletedTasks() throws {
+        let store = Store(persistence: Persistence(inMemory: true))
+        let list = TaskList(name: "测试"); store.save(list)
+        let parent = try XCTUnwrap(store.add("父任务",listID: list.id))
+        let child = try XCTUnwrap(store.add("已单独删除",listID: list.id,parentID: parent))
+        store.mutate(child) { $0.deleted = true }
+        let other = try XCTUnwrap(store.add("跨清单子任务",parentID: parent))
+        XCTAssertTrue(store.deleteList(list.id)); XCTAssertEqual(store.trashEntryCount,2); XCTAssertTrue(store.restoreList(list.id))
+        XCTAssertTrue(store.tasks.first { $0.id == child }!.deleted)
+        XCTAssertFalse(store.tasks.first { $0.id == other }!.deleted)
+        XCTAssertNil(store.tasks.first { $0.id == other }!.listID)
+        // A task restored from a deleted list must have a visible active container.
+        XCTAssertTrue(store.deleteList(list.id)); store.restoreTask(parent)
+        XCTAssertFalse(store.lists.first { $0.id == list.id }!.deleted)
+        XCTAssertFalse(store.tasks.first { $0.id == parent }!.deleted)
+    }
+    @MainActor func testLegacyDeletedListAndNameConflictRemainRecoverable() {
+        let store = Store(persistence: Persistence(inMemory: true))
+        var old = TaskList(name: "工作",folder: "项目"); old.deleted = true; store.save(old)
+        store.save(TaskList(name: "工作",folder: "项目"))
+        store.save(TaskList(name: "工作（恢复）",folder: "项目"))
+        XCTAssertTrue(store.restoreList(old.id)); store.reload()
+        XCTAssertEqual(store.lists.first { $0.id == old.id }?.name,"工作（恢复 2）")
+        XCTAssertEqual(store.lists.first { $0.id == old.id }?.folder,"项目")
+    }
+    @MainActor func testListTransactionRollsBackBothListAndTasks() throws {
+        let persistence = Persistence(inMemory: true)
+        var list = TaskList(name: "原清单"); try persistence.save(list)
+        var task = TaskItem(); task.listID = list.id; try persistence.save(task)
+        enum Failure: Error { case simulated }
+        XCTAssertThrowsError(try persistence.transaction {
+            list.deleted = true; try persistence.save(list)
+            task.deleted = true; task.trashedWithList = list.id; try persistence.save(task)
+            throw Failure.simulated
+        })
+        XCTAssertFalse(try persistence.load(TaskList.self).first!.deleted)
+        XCTAssertFalse(try persistence.load(TaskItem.self).first!.deleted)
+        // The cache must also be rolled back; a subsequent identical change persists.
+        try persistence.save(list)
+        XCTAssertTrue(try persistence.load(TaskList.self).first!.deleted)
+    }
+    @MainActor func testDefaultDocumentModeIsCapturedOnlyForNewTasks() throws {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "defaultDocumentMode")
+        defer { if let previous { defaults.set(previous,forKey: "defaultDocumentMode") } else { defaults.removeObject(forKey: "defaultDocumentMode") } }
+        let store = Store(persistence: Persistence(inMemory: true))
+        defaults.set("markdown",forKey: "defaultDocumentMode")
+        let markdown = try XCTUnwrap(store.add("Markdown 任务"))
+        defaults.set("richText",forKey: "defaultDocumentMode")
+        let rich = try XCTUnwrap(store.add("富文本任务"))
+        store.reload()
+        XCTAssertEqual(store.tasks.first { $0.id == markdown }?.editingMode,.markdown)
+        XCTAssertEqual(store.tasks.first { $0.id == rich }?.editingMode,.richText)
+        defaults.set("invalid",forKey: "defaultDocumentMode")
+        XCTAssertEqual(DocumentEditingMode.defaultMode(),.richText)
+        XCTAssertEqual(TaskItem().editingMode,.richText,"旧任务不能随全局设置改变正文解析方式")
+    }
+
     @MainActor func testFittedLayoutIncludesTrailingEmptyLineAndReportsOnlyChanges() throws {
         let view = DocumentScrollView(frame: NSRect(x: 0,y: 0,width: 400,height: 200))
         let editor = DocumentTextView(frame: view.bounds)

@@ -4,6 +4,9 @@ protocol ListRecord: Codable, Identifiable where ID == UUID { var id: UUID { get
 enum DocumentEditingMode: String, Codable, CaseIterable {
     case richText, markdown
     var title: String { self == .richText ? "富文本" : "Markdown" }
+    static func defaultMode(in defaults: UserDefaults = .standard) -> Self {
+        defaults.string(forKey: "defaultDocumentMode").flatMap(Self.init(rawValue:)) ?? .richText
+    }
 }
 struct TaskItem: ListRecord, Hashable {
     static let kind = "task"
@@ -14,7 +17,7 @@ struct TaskItem: ListRecord, Hashable {
     var priority = 0; var starred = false; var completed = false; var completedAt: Date?
     var start: Date?; var due: Date?; var allDay = true; var duration: Double = 1800
     var reminders: [Double] = []; var repeatRule = RepeatRule(); var parentID: UUID?
-    var trashedWithParent: UUID?; var checks: [CheckItem] = []; var attachments: [Attachment] = []
+    var trashedWithList: UUID?; var trashedWithParent: UUID?; var checks: [CheckItem] = []; var attachments: [Attachment] = []
     var created = Date(); var order: Double = Date().timeIntervalSince1970; var isTemplate = false
     var archived: Bool?; var special = ""; var sourceID: String?
 }

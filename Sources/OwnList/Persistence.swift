@@ -9,6 +9,7 @@ final class Persistence {
     let container: NSPersistentContainer
     let root: URL
     let inMemory: Bool
+    private var inTransaction = false
     private var cacheLoaded = false
     private var fieldCache: [UUID: [String: String]] = [:]
     var loadError: String?
@@ -81,12 +82,20 @@ final class Persistence {
             let o = NSEntityDescription.insertNewObject(forEntityName: "FieldVersion", into: container.viewContext)
             o.setValue(UUID(), forKey: "id"); o.setValue(record.id, forKey: "owner"); o.setValue(T.kind, forKey: "kind"); o.setValue(key, forKey: "field"); o.setValue(json, forKey: "json"); o.setValue(Date(), forKey: "timestamp")
         }
-        try container.viewContext.save(); fieldCache[record.id] = previous
+        if !inTransaction { try container.viewContext.save() }; fieldCache[record.id] = previous
     }
     func saveBlob(path: String, data: Data) throws {
         let r = NSFetchRequest<NSManagedObject>(entityName: "AttachmentBlob"); r.predicate = NSPredicate(format: "path == %@",path); r.fetchLimit = 1
         guard try container.viewContext.fetch(r).isEmpty else { return }
-        let object = NSEntityDescription.insertNewObject(forEntityName: "AttachmentBlob",into: container.viewContext); object.setValue(path,forKey: "path"); object.setValue(data,forKey: "data"); try container.viewContext.save()
+        let object = NSEntityDescription.insertNewObject(forEntityName: "AttachmentBlob",into: container.viewContext); object.setValue(path,forKey: "path"); object.setValue(data,forKey: "data"); if !inTransaction { try container.viewContext.save() }
+    }
+    // Publish list and task tombstones together, including when disk writes fail.
+    func transaction(_ body: () throws -> Void) throws {
+        precondition(!inTransaction)
+        inTransaction = true
+        defer { inTransaction = false }
+        do { try body(); try container.viewContext.save() }
+        catch { container.viewContext.rollback(); fieldCache.removeAll(); cacheLoaded = false; throw error }
     }
     func restoreBlobs() throws {
         let r = NSFetchRequest<NSManagedObject>(entityName: "AttachmentBlob")
@@ -117,6 +126,10 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
         WidgetSnapshot.write(tasks: tasks, lists: lists) }
     }
+    var trashEntryCount: Int {
+        let deletedLists = Set(lists.filter(\.deleted).map(\.id))
+        return deletedLists.count + tasks.filter { $0.deleted && $0.trashedWithList.map(deletedLists.contains) != true }.count
+    }
     var backup: Backup { Backup(tasks: tasks, lists: lists, filters: filters, habits: habits, focus: focus, subscriptions: subscriptions) }
     @discardableResult func save<T: ListRecord>(_ record: T, undoable: Bool = true) -> Bool {
         let before = undoable ? backup : nil
@@ -143,7 +156,61 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         if let r = record as? TaskItem { tasks = updated(tasks,r); if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count); WidgetSnapshot.write(tasks: tasks,lists: lists) } }
         if let r = record as? TaskList { lists = updated(lists,r) }; if let r = record as? SavedFilter { filters = updated(filters,r) }; if let r = record as? Habit { habits = updated(habits,r) }; if let r = record as? FocusRecord { focus = updated(focus,r) }; if let r = record as? CalendarSubscription { subscriptions = updated(subscriptions,r) }
     }
-    func mutate(_ id: UUID, _ body: (inout TaskItem) -> Void) { guard var task = tasks.first(where: { $0.id == id }) else { return }; let before = backup; let wasDeleted = task.deleted; body(&task); save(task); if task.deleted != wasDeleted { cascadeDelete(id,deleted: task.deleted,visited: [id]); groupUndo(before) } }
+    @discardableResult func deleteList(_ id: UUID) -> Bool {
+        guard var list = lists.first(where: { $0.id == id && !$0.deleted }) else { return false }
+        list.deleted = true
+        var members = Set(tasks.filter { $0.listID == id && !$0.deleted }.map(\.id))
+        // Include descendants even if an older import assigned a different list.
+        var previousCount = -1
+        while previousCount != members.count {
+            previousCount = members.count
+            for task in tasks where !task.deleted && task.parentID.map(members.contains) == true { members.insert(task.id) }
+        }
+        let changed = tasks.filter { members.contains($0.id) }.map { original -> TaskItem in
+            var task = original; task.deleted = true; task.trashedWithList = id; return task
+        }
+        return saveListChange(list,tasks: changed)
+    }
+    @discardableResult func restoreList(_ id: UUID) -> Bool {
+        guard var list = lists.first(where: { $0.id == id && $0.deleted }) else { return false }
+        let originalName = list.name
+        var suffix = 0
+        while lists.contains(where: { !$0.deleted && $0.folder.localizedCaseInsensitiveCompare(list.folder) == .orderedSame && $0.name.localizedCaseInsensitiveCompare(list.name) == .orderedSame }) {
+            suffix += 1; list.name = originalName + (suffix == 1 ? "（恢复）" : "（恢复 \(suffix)）")
+        }
+        list.deleted = false
+        let changed = tasks.filter { $0.trashedWithList == id }.map { original -> TaskItem in
+            var task = original; task.deleted = false; task.trashedWithList = nil; return task
+        }
+        return saveListChange(list,tasks: changed)
+    }
+    private func saveListChange(_ list: TaskList,tasks changed: [TaskItem]) -> Bool {
+        let before = backup
+        do {
+            try persistence.transaction { try persistence.save(list); for task in changed { try persistence.save(task) } }
+            let changes = Dictionary(uniqueKeysWithValues: changed.map { ($0.id,$0) })
+            lists = lists.map { $0.id == list.id ? list : $0 }
+            tasks = tasks.map { changes[$0.id] ?? $0 }
+            groupUndo(before); redoStack.removeAll()
+            if !persistence.inMemory {
+                DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
+                WidgetSnapshot.write(tasks: tasks,lists: lists)
+                for task in changed { NotificationService.shared.schedule(task) }
+            }
+            if selectedTask.map({ id in changed.contains { $0.id == id && $0.deleted } }) == true { selectedTask = nil }
+            return true
+        } catch { self.error = error.localizedDescription; return false }
+    }
+    func restoreTask(_ id: UUID) {
+        guard let task = tasks.first(where: { $0.id == id && $0.deleted }) else { return }
+        let before = backup
+        if let listID = task.trashedWithList ?? task.listID, lists.contains(where: { $0.id == listID && $0.deleted }) {
+            guard restoreList(listID) else { return }
+        }
+        mutate(id) { $0.deleted = false; $0.trashedWithList = nil }
+        groupUndo(before)
+    }
+    func mutate(_ id: UUID, _ body: (inout TaskItem) -> Void) { guard var task = tasks.first(where: { $0.id == id }) else { return }; let before = backup; let wasDeleted = task.deleted; body(&task); guard save(task) else { return }; if task.deleted != wasDeleted { cascadeDelete(id,deleted: task.deleted,visited: [id]); groupUndo(before) } }
     /// One saved operation for multiline input, with stable IDs and a single undo step.
     @discardableResult func addChecks(_ taskID: UUID,input: String) -> [UUID] {
         let titles = input.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -168,7 +235,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
     private func cascadeDelete(_ id: UUID,deleted: Bool,visited: Set<UUID>) { for var child in tasks.filter({ $0.parentID == id && (deleted ? !$0.deleted : $0.trashedWithParent == id) }) { guard !visited.contains(child.id) else { continue }; child.deleted = deleted; child.trashedWithParent = deleted ? id : nil; save(child,undoable: false); cascadeDelete(child.id,deleted: deleted,visited: visited.union([child.id])) } }
     @discardableResult func add(_ input: String, listID: UUID? = nil, parentID: UUID? = nil, defaultDue: Date? = nil, section: String = "", starred: Bool = false) -> UUID? {
         let parsed = QuickParser.parse(input); guard !parsed.title.isEmpty else { return nil }
-        var task = TaskItem(); task.title = parsed.title; task.due = parsed.due ?? defaultDue; task.section = section; task.starred = starred; task.tags = parsed.tags; task.priority = parsed.priority; task.listID = listID; task.parentID = parentID
+        var task = TaskItem(); task.documentMode = DocumentEditingMode.defaultMode(); task.title = parsed.title; task.due = parsed.due ?? defaultDue; task.section = section; task.starred = starred; task.tags = parsed.tags; task.priority = parsed.priority; task.listID = listID; task.parentID = parentID
         task.allDay = task.due.map { Calendar.current.component(.hour, from: $0) == 0 && Calendar.current.component(.minute, from: $0) == 0 } ?? true
         if task.due != nil { task.reminders = [0] }; guard save(task) else { return nil }; selectedTask = task.id; return task.id
     }
