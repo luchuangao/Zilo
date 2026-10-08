@@ -175,9 +175,104 @@ final class OwnListTests: XCTestCase {
         let controller = DocumentEditorController(); controller.editor = editor; controller.rich = false
         XCTAssertTrue(try controller.insertMarkdown([file]).isEmpty)
         XCTAssertEqual(editor.string,source)
+        let store = Store(persistence: Persistence(inMemory: true)); defer { try? FileManager.default.removeItem(at: store.persistence.root) }
+        editor.imageReference = { try store.writeDocumentImage($0,name: $1) }
         try editor.insertImage(documentImage())
-        XCTAssertTrue(editor.string.hasPrefix(source)); XCTAssertTrue(editor.string.contains("data:image/png;base64,"))
-        XCTAssertTrue(RichDocument.hasImages(MarkdownDocument.parse(editor.string).content))
+        XCTAssertTrue(editor.string.hasPrefix(source)); XCTAssertTrue(editor.string.contains("Attachments/Images/"))
+        XCTAssertFalse(editor.string.contains("base64")); XCTAssertLessThan(editor.string.count,source.count + 100)
+        XCTAssertTrue(RichDocument.hasImages(MarkdownDocument.parse(editor.string,baseURL: store.persistence.root).content))
+    }
+
+
+    @MainActor func testDocumentImageLayoutCapsDisplayWithoutChangingOriginal() throws {
+        let image = NSImage(size: NSSize(width: 1600,height: 1200)); image.lockFocus(); NSColor.systemBlue.setFill(); NSBezierPath(rect: NSRect(origin: .zero,size: image.size)).fill(); image.unlockFocus()
+        let bytes = try XCTUnwrap(NSBitmapImageRep(data: XCTUnwrap(image.tiffRepresentation))?.representation(using: .png,properties: [:]))
+        let content = try RichDocument.image(bytes)
+        let attachment = try XCTUnwrap(content.attribute(.attachment,at: 0,effectiveRange: nil) as? NSTextAttachment)
+        let original = attachment.fileWrapper?.regularFileContents
+        let view = DocumentScrollView(frame: NSRect(x: 0,y: 0,width: 900,height: 500)); view.fitsContent = false
+        let editor = DocumentTextView(frame: view.bounds); editor.isRichText = true; editor.textStorage?.setAttributedString(content); view.documentView = editor
+        view.layout()
+        XCTAssertLessThanOrEqual(attachment.attachmentCell!.cellSize().width,520)
+        XCTAssertLessThanOrEqual(attachment.attachmentCell!.cellSize().height,360)
+        XCTAssertEqual(attachment.fileWrapper?.regularFileContents,original)
+        view.setFrameSize(NSSize(width: 260,height: 500)); view.layout()
+        XCTAssertLessThanOrEqual(attachment.attachmentCell!.cellSize().width,252)
+    }
+    func testTaskSummaryDoesNotExposeImageEncodingOrEmptyAttachmentLines() {
+        var task = TaskItem(); task.notes = "\u{fffc}\n\n图片后文\n"; XCTAssertEqual(TaskDocument.summary(task),"图片后文")
+        task.notes = "![图片](data:image/png;base64,abc)\n尾部"; XCTAssertEqual(TaskDocument.summary(task),"[图片] 尾部")
+        task.notes = "\u{fffc}\n  "; XCTAssertEqual(TaskDocument.summary(task),"")
+    }
+    @MainActor func testManagedMarkdownImagesDeduplicateAndSurviveBackupAndModeSwitch() throws {
+        let store = Store(persistence: Persistence(inMemory: true)); defer { try? FileManager.default.removeItem(at: store.persistence.root) }
+        var task = TaskItem(); task.documentMode = .markdown; XCTAssertTrue(store.save(task))
+        let image = try documentImage()
+        let path = try store.saveDocumentImage(image,name: "样图.png",to: task.id)
+        XCTAssertEqual(path,try store.saveDocumentImage(image,name: "副本.png",to: task.id))
+        task = try XCTUnwrap(store.tasks.first); XCTAssertEqual(task.attachments.count,1)
+        task.notes = "图片前🙂\n![样图](" + path + ")\n图片后"
+        XCTAssertTrue(store.save(task))
+        let output = store.persistence.root.appendingPathComponent("backup.json"); try store.export(to: output)
+        let backup = try ImportService.preview(output).backup
+        XCTAssertNotNil(backup.attachmentFiles?[path])
+        try FileManager.default.removeItem(at: store.persistence.root.appendingPathComponent(path))
+        try store.persistence.restoreBlobs()
+        XCTAssertTrue(RichDocument.hasImages(MarkdownDocument.parse(task.notes,baseURL: store.persistence.root).content))
+        TaskDocument.switchMode(&task,to: .richText,baseURL: store.persistence.root)
+        XCTAssertTrue(RichDocument.hasImages(try XCTUnwrap(task.richText.flatMap(RichDocument.decode))))
+        TaskDocument.switchMode(&task,to: .markdown)
+        XCTAssertTrue(store.save(task))
+        let stored = try XCTUnwrap(store.tasks.first)
+        XCTAssertFalse(stored.notes.contains("data:image/")); XCTAssertEqual(stored.attachments.count,1)
+        XCTAssertTrue(RichDocument.hasImages(MarkdownDocument.parse(stored.notes,baseURL: store.persistence.root).content))
+    }
+    @MainActor func testLegacyInlineImageMigrationPreservesCodeAndSource() throws {
+        let persistence = Persistence(inMemory: true); defer { try? FileManager.default.removeItem(at: persistence.root) }
+        let uri = "data:image/png;base64," + (try documentImage()).base64EncodedString()
+        let literal = "```markdown\n![示例](" + uri + ")\n```\n`![行内](" + uri + ")`\n"
+        var task = TaskItem(); task.documentMode = .markdown
+        task.notes = literal + "中文🙂 ![原图](" + uri + ")\n![副本](" + uri + ")\n尾部  \n"
+        try persistence.save(task)
+        let store = Store(persistence: persistence)
+        let migrated = try XCTUnwrap(store.tasks.first)
+        XCTAssertNil(store.error); XCTAssertTrue(migrated.notes.hasPrefix(literal)); XCTAssertTrue(migrated.notes.hasSuffix("尾部  \n"))
+        XCTAssertTrue(migrated.notes.contains("![原图](Attachments/Images/")); XCTAssertEqual(migrated.attachments.count,1)
+        XCTAssertEqual(try persistence.load(TaskItem.self).first?.notes,migrated.notes)
+        store.reload(); XCTAssertEqual(store.tasks.first?.notes,migrated.notes)
+        XCTAssertTrue(RichDocument.hasImages(MarkdownDocument.parse(migrated.notes,baseURL: persistence.root).content))
+    }
+    @MainActor func testMarkdownImageFileImportCopiesRelativeAssetsAndFailureKeepsText() throws {
+        let store = Store(persistence: Persistence(inMemory: true)); defer { try? FileManager.default.removeItem(at: store.persistence.root) }
+        let sourceFolder = store.persistence.root.appendingPathComponent("original")
+        try FileManager.default.createDirectory(at: sourceFolder,withIntermediateDirectories: true)
+        try documentImage().write(to: sourceFolder.appendingPathComponent("原图.png"))
+        let source = "# 中文🙂\n![图片](原图.png)\n\n```\n![代码](原图.png)\n```\n"
+        let file = sourceFolder.appendingPathComponent("input.md"); try source.write(to: file,atomically: true,encoding: .utf8)
+        let editor = DocumentTextView(); editor.isRichText = false; editor.imageReference = { try store.writeDocumentImage($0,name: $1) }
+        try editor.insertMarkdownFile(file)
+        try FileManager.default.removeItem(at: sourceFolder)
+        XCTAssertTrue(editor.string.hasPrefix("# 中文🙂\n![图片](Attachments/Images/")); XCTAssertTrue(editor.string.hasSuffix("```\n![代码](原图.png)\n```\n"))
+        XCTAssertTrue(RichDocument.hasImages(MarkdownDocument.parse(editor.string,baseURL: store.persistence.root).content))
+        let before = editor.string
+        editor.imageReference = { _,_ in throw ServiceError.message("磁盘写入失败") }
+        XCTAssertThrowsError(try editor.insertImage(documentImage())); XCTAssertEqual(editor.string,before)
+    }
+    @MainActor func testManagedMarkdownExportIncludesPortableAssetsWordAndPDF() throws {
+        let store = Store(persistence: Persistence(inMemory: true)); defer { try? FileManager.default.removeItem(at: store.persistence.root) }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder,withIntermediateDirectories: true); defer { try? FileManager.default.removeItem(at: folder) }
+        let path = try store.writeDocumentImage(documentImage())
+        var task = TaskItem(); task.title = "图片路径验收"; task.documentMode = .markdown
+        task.notes = "# 正文🙂\n\n![样图](" + path + ")\n\n```swift\n\tlet x = 1\n```\n尾部文字"
+        for format in [DocumentExport.Format.markdown,.word,.pdf] { try DocumentExport.write(task: task,children: [],format: format,to: folder.appendingPathComponent("sample." + format.rawValue),baseURL: store.persistence.root) }
+        try FileManager.default.removeItem(at: store.persistence.root.appendingPathComponent(path))
+        let markdown = try String(contentsOf: folder.appendingPathComponent("sample.md"),encoding: .utf8)
+        XCTAssertFalse(markdown.contains("base64")); XCTAssertFalse(markdown.contains("Attachments/Images/")); XCTAssertTrue(markdown.contains(".assets-"))
+        XCTAssertTrue(markdown.hasSuffix("```swift\n\tlet x = 1\n```\n尾部文字"))
+        let parsed = MarkdownDocument.parse(markdown,baseURL: folder); XCTAssertTrue(parsed.warnings.isEmpty); XCTAssertTrue(RichDocument.hasImages(parsed.content))
+        let word = try Data(contentsOf: folder.appendingPathComponent("sample.docx")); XCTAssertNotNil(word.range(of: Data("word/media/image1.png".utf8)))
+        let pdf = try XCTUnwrap(PDFDocument(url: folder.appendingPathComponent("sample.pdf"))); XCTAssertTrue(pdf.string?.precomposedStringWithCompatibilityMapping.contains("尾部文字") == true)
     }
 
     @MainActor func testPreviewUpdatesIndependentlyAndRetainsScroll() throws {

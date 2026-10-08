@@ -13,10 +13,10 @@ extension NSTextView {
 }
 
 enum TaskPrintDocument {
-    static func makeView(task: TaskItem,children: [TaskItem] = []) -> NSTextView {
+    static func makeView(task: TaskItem,children: [TaskItem] = [],baseURL: URL? = nil) -> NSTextView {
         let content = NSMutableAttributedString(string: task.title + "\n\n",attributes: [.font: NSFont.boldSystemFont(ofSize: 22)])
         if let rich = task.richText, let attributed = RichDocument.decode(rich) { content.append(attributed) }
-        else if task.editingMode == .markdown { content.append(MarkdownDocument.parse(task.notes).content) }
+        else if task.editingMode == .markdown { content.append(MarkdownDocument.parse(task.notes,baseURL: baseURL).content) }
         else { content.append(NSAttributedString(string: task.notes,attributes: [.font: NSFont.systemFont(ofSize: 14)])) }
         for check in task.checks { content.append(NSAttributedString(string: "\n\(check.done ? "☑" : "☐") \(check.title)",attributes: [.font: NSFont.systemFont(ofSize: 14)])) }
         if !children.isEmpty { content.append(NSAttributedString(string: "\n\n子任务",attributes: [.font: NSFont.boldSystemFont(ofSize: 14)])) }
@@ -89,7 +89,7 @@ final class DocumentEditorController: ObservableObject {
         for url in urls {
             if !rich {
                 let scoped = url.startAccessingSecurityScopedResource(); defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                editor.insertDocument(NSAttributedString(string: try String(contentsOf: url,encoding: .utf8)))
+                if let editor = editor as? DocumentTextView { try editor.insertMarkdownFile(url) }
                 continue
             }
             let result = try MarkdownDocument.read(url,authorizeImages: true); warnings += result.warnings
@@ -199,6 +199,8 @@ struct DetailDocumentEditor: NSViewRepresentable {
     var scrolling = false
     var accessibilityLabel = "任务正文"
     var onError: (String) -> Void = { _ in }
+    var imageReference: ((Data,String) throws -> String)?
+    var baseURL: URL?
     var controller: DocumentEditorController
     @Binding var height: CGFloat
     var onChange: (String,Data?) -> Void
@@ -207,7 +209,7 @@ struct DetailDocumentEditor: NSViewRepresentable {
         let scroll = DocumentScrollView()
         let editor = DocumentTextView()
         editor.isEditable = editable; editor.isSelectable = true; editor.allowsUndo = true; editor.importsGraphics = rich
-        editor.transferError = onError
+        editor.transferError = onError; editor.imageReference = imageReference; editor.documentBaseURL = baseURL
         editor.drawsBackground = false; editor.isHorizontallyResizable = false; editor.isVerticallyResizable = true
         editor.autoresizingMask = [.width]; editor.textContainerInset = NSSize(width: 0,height: 3)
         editor.textContainer?.lineFragmentPadding = 0; editor.textContainer?.widthTracksTextView = true
@@ -261,6 +263,8 @@ struct DetailDocumentEditor: NSViewRepresentable {
             guard let editor = view.documentView as? NSTextView else { return }
             parent.controller.editor = editor
             (editor as? DocumentTextView)?.transferError = parent.onError
+            (editor as? DocumentTextView)?.imageReference = parent.imageReference
+            (editor as? DocumentTextView)?.documentBaseURL = parent.baseURL
             // Even a height or theme refresh must leave the marked range and
             // input-method session intact until its text is committed.
             guard !editor.hasMarkedText() else { view.needsLayout = true; return }
@@ -357,10 +361,22 @@ class DocumentTextView: NSTextView {
         }
     }
     var transferError: (String) -> Void = { _ in }
+    var imageReference: ((Data,String) throws -> String)?
+    var documentBaseURL: URL?
+    func insertMarkdownFile(_ url: URL) throws {
+        let scoped = url.startAccessingSecurityScopedResource(); defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let source = try String(contentsOf: url,encoding: .utf8)
+        let imported = try MarkdownDocument.rewriteImages(source) { address in
+            guard let imageReference, let bytes = MarkdownDocument.imageBytes(address,baseURL: url.deletingLastPathComponent()) else { return address }
+            return try imageReference(bytes,URL(fileURLWithPath: address).lastPathComponent)
+        }
+        insertText(imported,replacementRange: selectedRange())
+    }
     func insertImage(_ data: Data, name: String = "图片.png") throws {
         if !isRichText {
-            let image = try RichDocument.image(data,name: name)
-            let source = MarkdownDocument.export(image,assets: "",inlineImages: true).text
+            guard let imageReference else { throw ServiceError.message("图片存储尚未就绪，请重新打开任务后重试。") }
+            let path = try imageReference(data,name)
+            let source = "![图片](" + path + ")"
             let caret = selectedRange().location
             let prefix = caret > 0 && (string as NSString).character(at: caret - 1) != 10 ? "\n" : ""
             insertText(prefix + source + "\n",replacementRange: selectedRange())
@@ -384,7 +400,7 @@ class DocumentTextView: NSTextView {
                     if isRichText { let document = try MarkdownDocument.read(url,authorizeImages: true); insertDocument(document.content); warnings += document.warnings }
                     else {
                         let scoped = url.startAccessingSecurityScopedResource(); defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                        insertText(try String(contentsOf: url,encoding: .utf8),replacementRange: selectedRange())
+                        try insertMarkdownFile(url)
                     }
                 }
                 typingAttributes = MarkdownTyping.bodyAttributes
@@ -434,7 +450,7 @@ final class DocumentScrollView: NSScrollView {
         super.layout()
         guard let editor = documentView as? NSTextView, let container = editor.textContainer, let manager = editor.layoutManager else { return }
         let width = max(1,contentSize.width)
-        if let storage = editor.textStorage, RichDocument.fitImages(storage,width: max(40,width - 8)) {
+        if let storage = editor.textStorage, RichDocument.fitImages(storage,width: min(520,max(40,width - 8)),maxHeight: 360) {
             manager.invalidateLayout(forCharacterRange: NSRange(location: 0,length: storage.length),actualCharacterRange: nil)
         }
         if container.containerSize.width != width { container.containerSize = NSSize(width: width,height: CGFloat.greatestFiniteMagnitude) }
@@ -454,6 +470,7 @@ final class DocumentScrollView: NSScrollView {
 /// or becomes the target of formatting commands. Re-render only changed source.
 struct MarkdownPreviewView: NSViewRepresentable {
     var source: String
+    var baseURL: URL?
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> DocumentScrollView {
         let scroll = DocumentScrollView()
@@ -466,17 +483,18 @@ struct MarkdownPreviewView: NSViewRepresentable {
         editor.textContainer?.lineFragmentPadding = 0; editor.textContainer?.widthTracksTextView = true
         editor.setAccessibilityLabel("Markdown 预览正文")
         scroll.documentView = editor
-        context.coordinator.render(source,in: scroll)
+        context.coordinator.render(source,in: scroll,baseURL: baseURL)
         return scroll
     }
-    func updateNSView(_ view: DocumentScrollView,context: Context) { context.coordinator.render(source,in: view) }
+    func updateNSView(_ view: DocumentScrollView,context: Context) { context.coordinator.render(source,in: view,baseURL: baseURL) }
     final class Coordinator {
         private var lastSource: String?
-        func render(_ source: String,in view: DocumentScrollView) {
-            guard source != lastSource, let editor = view.documentView as? NSTextView else { return }
-            lastSource = source
+        private var lastBaseURL: URL?
+        func render(_ source: String,in view: DocumentScrollView,baseURL: URL? = nil) {
+            guard source != lastSource || baseURL != lastBaseURL, let editor = view.documentView as? NSTextView else { return }
+            lastSource = source; lastBaseURL = baseURL
             let offset = view.contentView.bounds.origin
-            let content = source.isEmpty ? NSAttributedString(string: "预览将在这里显示",attributes: [.font: NSFont.systemFont(ofSize: 14),.foregroundColor: NSColor.tertiaryLabelColor]) : MarkdownDocument.parse(source).content
+            let content = source.isEmpty ? NSAttributedString(string: "预览将在这里显示",attributes: [.font: NSFont.systemFont(ofSize: 14),.foregroundColor: NSColor.tertiaryLabelColor]) : MarkdownDocument.parse(source,baseURL: baseURL).content
             editor.textStorage?.setAttributedString(content)
             view.layout()
             view.contentView.scroll(to: NSPoint(x: 0,y: min(offset.y,max(0,editor.frame.height - view.contentSize.height))))

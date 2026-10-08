@@ -141,6 +141,40 @@ enum MarkdownDocument {
         output.append(NSAttributedString(string: unescape(source.substring(from: offset)), attributes: attributes))
         return output
     }
+    /// Replace actual image destinations only, preserving source syntax and code examples.
+    static func rewriteImages(_ source: String,_ transform: (String) throws -> String) rethrows -> String {
+        let regex = try! NSRegularExpression(pattern: #"(?<!\\)(?:(`+).*?\1|!\[[^\]]*\]\((<[^>]+>|[^)]+)\))"#)
+        var fence: String?; var result = ""
+        for line in source.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let current = fence {
+                if trimmed.hasPrefix(current), trimmed.dropFirst(current.count).trimmingCharacters(in: .whitespaces).isEmpty { fence = nil }
+                result += line + "\n"; continue
+            }
+            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { fence = String(trimmed.prefix { $0 == trimmed.first }); result += line + "\n"; continue }
+            let ns = line as NSString; var rewritten = line
+            for match in regex.matches(in: line,range: NSRange(location: 0,length: ns.length)).reversed() {
+                let range = match.range(at: 2); guard range.location != NSNotFound else { continue }
+                let original = ns.substring(with: range)
+                let address = original.trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
+                let changed = try transform(address)
+                if changed != address {
+                    rewritten = (rewritten as NSString).replacingCharacters(in: range,with: changed.contains(" ") ? "<" + changed + ">" : changed)
+                }
+            }
+            result += rewritten + "\n"
+        }
+        result.removeLast(); return result
+    }
+    static func imageBytes(_ address: String,baseURL: URL?) -> Data? {
+        let decoded = address.removingPercentEncoding ?? address
+        if decoded.hasPrefix("data:image/"), let comma = decoded.firstIndex(of: ",") {
+            return Data(base64Encoded: String(decoded[decoded.index(after: comma)...]))
+        }
+        guard !decoded.contains("://") || decoded.hasPrefix("file:") else { return nil }
+        let url = decoded.hasPrefix("file:") ? URL(string: decoded) : decoded.hasPrefix("/") ? URL(fileURLWithPath: decoded) : baseURL?.appendingPathComponent(decoded)
+        return url.flatMap { try? Data(contentsOf: $0) }
+    }
     private static func unescape(_ text: String) -> String {
         text.replacingOccurrences(of: #"\\([\\`*_{}\[\]()#+.!>~-])"#, with: "$1", options: .regularExpression)
     }
@@ -196,7 +230,12 @@ enum MarkdownDocument {
 /// Switching modes converts the document once; ordinary Markdown edits keep
 /// the exact source, including whitespace, fences and incomplete syntax.
 enum TaskDocument {
-    static func switchMode(_ task: inout TaskItem, to mode: DocumentEditingMode) {
+    static func summary(_ task: TaskItem) -> String {
+        let text = task.notes.replacingOccurrences(of: "\u{fffc}",with: "")
+            .replacingOccurrences(of: #"!\[[^\]]*\]\([^)]+\)"#,with: "[图片]",options: .regularExpression)
+        return text.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    }
+    static func switchMode(_ task: inout TaskItem, to mode: DocumentEditingMode,baseURL: URL? = nil) {
         guard task.editingMode != mode else { return }
         if mode == .markdown {
             if let content = task.richText.flatMap(RichDocument.decode) {
@@ -204,7 +243,7 @@ enum TaskDocument {
             }
             task.richText = nil
         } else {
-            let content = MarkdownDocument.parse(task.notes).content
+            let content = MarkdownDocument.parse(task.notes,baseURL: baseURL).content
             task.notes = content.string
             task.richText = RichDocument.encode(content)
         }
@@ -214,16 +253,16 @@ enum TaskDocument {
 
 enum DocumentExport {
     enum Format: String { case word = "docx", pdf = "pdf", markdown = "md" }
-    static func content(task: TaskItem, children: [TaskItem]) -> NSAttributedString {
+    static func content(task: TaskItem, children: [TaskItem],baseURL: URL? = nil) -> NSAttributedString {
         let output = NSMutableAttributedString(string: task.title + "\n\n", attributes: [.font: NSFont.boldSystemFont(ofSize: 24), .foregroundColor: NSColor.black])
-        output.append(task.richText.flatMap(RichDocument.decode) ?? MarkdownDocument.parse(task.notes).content)
+        output.append(task.richText.flatMap(RichDocument.decode) ?? MarkdownDocument.parse(task.notes,baseURL: baseURL).content)
         for item in task.checks { output.append(NSAttributedString(string: "\n\(item.done ? "☑" : "☐") \(item.title)", attributes: MarkdownTyping.bodyAttributes)) }
         if !children.isEmpty { output.append(NSAttributedString(string: "\n\n子任务\n", attributes: [.font: NSFont.boldSystemFont(ofSize: 18)])) }
         for child in children { output.append(NSAttributedString(string: "\(child.completed ? "☑" : "☐") \(child.title)\n", attributes: MarkdownTyping.bodyAttributes)) }
         return output
     }
-    static func write(task: TaskItem, children: [TaskItem], format: Format, to url: URL) throws {
-        let content = content(task: task, children: children)
+    static func write(task: TaskItem, children: [TaskItem], format: Format, to url: URL,baseURL: URL? = nil) throws {
+        let content = content(task: task, children: children,baseURL: baseURL)
         switch format {
         case .word: try WordDocument.data(content).write(to: url, options: .atomic)
         case .markdown:
@@ -232,6 +271,19 @@ enum DocumentExport {
                 for item in task.checks { source += "\n- [\(item.done ? "x" : " ")] \(item.title)" }
                 if !children.isEmpty { source += "\n\n## 子任务\n" }
                 for child in children { source += "- [\(child.completed ? "x" : " ")] \(child.title)\n" }
+                let assets = url.deletingPathExtension().lastPathComponent + ".assets-" + UUID().uuidString.prefix(8)
+                var images: [(String,Data)] = []
+                source = MarkdownDocument.rewriteImages(source) { address in
+                    guard let bytes = MarkdownDocument.imageBytes(address,baseURL: baseURL) else { return address }
+                    let name = "image-\(images.count + 1).png"
+                    guard let image = try? RichDocument.image(bytes), let attachment = image.attribute(.attachment,at: 0,effectiveRange: nil) as? NSTextAttachment, let png = RichDocument.imageData(attachment) else { return address }
+                    images.append((name,png)); return String(assets) + "/" + name
+                }
+                if !images.isEmpty {
+                    let folder = url.deletingLastPathComponent().appendingPathComponent(String(assets))
+                    try FileManager.default.createDirectory(at: folder,withIntermediateDirectories: true)
+                    for (name,bytes) in images { try bytes.write(to: folder.appendingPathComponent(name),options: .atomic) }
+                }
                 try source.write(to: url,atomically: true,encoding: .utf8)
                 return
             }
@@ -245,7 +297,7 @@ enum DocumentExport {
             }
             try exported.text.write(to: url, atomically: true, encoding: .utf8)
         case .pdf:
-            let view = TaskPrintDocument.makeView(task: task, children: children)
+            let view = TaskPrintDocument.makeView(task: task, children: children,baseURL: baseURL)
             let info = NSPrintInfo.shared.copy() as! NSPrintInfo
             info.paperSize = NSSize(width: 595.28, height: 841.89)
             info.topMargin = 36; info.bottomMargin = 36; info.leftMargin = 36; info.rightMargin = 36

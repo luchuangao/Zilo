@@ -3,6 +3,7 @@ import CoreData
 import Combine
 import CloudKit
 import CryptoKit
+import AppKit
 
 struct FieldVersion: Identifiable { var id: UUID; var owner: UUID; var kind: String; var field: String; var json: String; var timestamp: Date }
 final class Persistence {
@@ -122,7 +123,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         if !persistence.inMemory { automaticBackup(); backupTimer = Timer.scheduledTimer(withTimeInterval: 3600,repeats: true) { [weak self] _ in Task { @MainActor in self?.automaticBackup() } } }
     }
     func reload() {
-        do { if let failure = persistence.loadError { throw ServiceError.message(failure) }; if !persistence.inMemory { try persistence.restoreBlobs() }; tasks = try persistence.load(TaskItem.self); lists = try persistence.load(TaskList.self); filters = try persistence.load(SavedFilter.self); habits = try persistence.load(Habit.self); focus = try persistence.load(FocusRecord.self); subscriptions = try persistence.load(CalendarSubscription.self) } catch { self.error = "读取数据失败：\(error.localizedDescription)" }
+        do { if let failure = persistence.loadError { throw ServiceError.message(failure) }; if !persistence.inMemory { try persistence.restoreBlobs() }; tasks = try persistence.load(TaskItem.self); lists = try persistence.load(TaskList.self); filters = try persistence.load(SavedFilter.self); habits = try persistence.load(Habit.self); focus = try persistence.load(FocusRecord.self); subscriptions = try persistence.load(CalendarSubscription.self); try migrateInlineDocumentImages() } catch { self.error = "读取数据失败：\(error.localizedDescription)" }
         if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
         WidgetSnapshot.write(tasks: tasks, lists: lists) }
     }
@@ -133,7 +134,55 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
     var backup: Backup { Backup(tasks: tasks, lists: lists, filters: filters, habits: habits, focus: focus, subscriptions: subscriptions) }
     @discardableResult func save<T: ListRecord>(_ record: T, undoable: Bool = true) -> Bool {
         let before = undoable ? backup : nil
-        do { try persistence.save(record); if let before { undoStack.append(before); if undoStack.count > 40 { undoStack.removeFirst() }; redoStack.removeAll() }; updatePublished(record); if !persistence.inMemory { if let task = record as? TaskItem { NotificationService.shared.schedule(task) }; if let habit = record as? Habit { NotificationService.shared.schedule(habit) } }; return true } catch { self.error = error.localizedDescription; return false }
+        do { var prepared = record
+            if var task = record as? TaskItem, task.editingMode == .markdown, task.notes.contains("data:image/") { try externalizeDocumentImages(&task); prepared = task as! T }
+            try persistence.save(prepared); if let before { undoStack.append(before); if undoStack.count > 40 { undoStack.removeFirst() }; redoStack.removeAll() }; updatePublished(prepared); if !persistence.inMemory { if let task = prepared as? TaskItem { NotificationService.shared.schedule(task) }; if let habit = record as? Habit { NotificationService.shared.schedule(habit) } }; return true } catch { self.error = error.localizedDescription; return false }
+    }
+    /// Images use the existing attachment backup and CloudKit blob transport.
+    func writeDocumentImage(_ bytes: Data,name: String = "图片.png") throws -> String {
+        let image = try RichDocument.image(bytes,name: name)
+        guard let attachment = image.attribute(.attachment,at: 0,effectiveRange: nil) as? NSTextAttachment, let png = RichDocument.imageData(attachment) else { throw RichDocument.TransferError.invalidImage(name) }
+        let digest = SHA256.hash(data: png).map { String(format: "%02x",$0) }.joined()
+        let path = "Attachments/Images/" + digest.prefix(24) + ".png"
+        let file = persistence.root.appendingPathComponent(path)
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(),withIntermediateDirectories: true)
+        if !FileManager.default.fileExists(atPath: file.path) { try png.write(to: file,options: .atomic) }
+        try persistence.saveBlob(path: path,data: png)
+        return path
+    }
+    func saveDocumentImage(_ bytes: Data,name: String,to id: UUID) throws -> String {
+        guard var task = tasks.first(where: { $0.id == id }) else { throw ServiceError.message("未找到要添加图片的任务。") }
+        let path = try writeDocumentImage(bytes,name: name)
+        if !task.attachments.contains(where: { $0.relativePath == path }) {
+            task.attachments.append(Attachment(name: name,relativePath: path))
+            guard save(task,undoable: false) else { throw ServiceError.message(error ?? "图片保存失败") }
+        }
+        return path
+    }
+    func externalizeDocumentImages(_ task: inout TaskItem) throws {
+        guard task.editingMode == .markdown else { return }
+        var images = task.attachments
+        let source = try MarkdownDocument.rewriteImages(task.notes) { address in
+            guard address.hasPrefix("data:image/"), let bytes = MarkdownDocument.imageBytes(address,baseURL: nil) else { return address }
+            let path = try writeDocumentImage(bytes)
+            if !images.contains(where: { $0.relativePath == path }) { images.append(Attachment(name: "图片.png",relativePath: path)) }
+            return path
+        }
+        task.notes = source; task.attachments = images
+    }
+    private func migrateInlineDocumentImages() throws {
+        let legacy = tasks.filter { $0.editingMode == .markdown && $0.notes.contains("data:image/") }
+        guard !legacy.isEmpty else { return }
+        var changed: [TaskItem] = []
+        for var task in legacy {
+            let original = task.notes
+            try externalizeDocumentImages(&task)
+            if task.notes != original { changed.append(task) }
+        }
+        guard !changed.isEmpty else { return }
+        if !persistence.inMemory { try manualBackup() }
+        try persistence.transaction { for task in changed { try persistence.save(task) } }
+        for task in changed { if let index = tasks.firstIndex(where: { $0.id == task.id }) { tasks[index] = task } }
     }
     func commitList(existing: TaskList?, name: String, folder: String, color: String, sections: String, defaultView: String? = nil) throws -> TaskList {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)

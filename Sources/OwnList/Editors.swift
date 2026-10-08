@@ -33,9 +33,9 @@ struct TaskDetailView: View {
                 GeometryReader { geometry in
                     HSplitView {
                         detailContent(task,documentHeight: max(220,geometry.size.height - (showFormatting ? 270 : 225)))
-                            .frame(minWidth: 300,maxWidth: .infinity,maxHeight: .infinity)
+                            .ignoresSafeArea(.container,edges: .top).frame(minWidth: 300,maxWidth: .infinity,maxHeight: .infinity)
                         if task.editingMode == .markdown && previewMarkdown {
-                            previewPane(task).frame(minWidth: 220,idealWidth: 320,maxWidth: .infinity,maxHeight: .infinity)
+                            previewPane(task).ignoresSafeArea(.container,edges: .top).frame(minWidth: 220,idealWidth: 320,maxWidth: .infinity,maxHeight: .infinity)
                         }
                     }
                 }
@@ -61,20 +61,20 @@ struct TaskDetailView: View {
             Divider()
             ScrollViewReader { reader in
                 ScrollView {
-                    VStack(alignment: .leading,spacing: 12) {
+                    VStack(alignment: .leading,spacing: 10) {
                         HStack(alignment: .top) {
                             TextField("任务标题",text: binding(\.title,default: ""),axis: .vertical)
-                                .font(.system(size: 20,weight: .semibold)).textFieldStyle(.plain)
+                                .font(.system(size: 18,weight: .semibold)).textFieldStyle(.plain)
                             Button { beginEntry("check") } label: { Image(systemName: "checklist").font(.system(size: 16)) }
                                 .help("添加检查项").accessibilityLabel("添加检查项").foregroundStyle(.secondary)
-                        }.padding(.bottom,6)
+                        }.padding(.bottom,2)
                         documentBody(task,height: documentHeight)
                         relatedItems(task)
                         if !task.tags.isEmpty {
                             Button { showOrganization = true } label: { Label(task.tags.map { "#" + $0 }.joined(separator: "  "),systemImage: "tag").font(.callout).foregroundStyle(.secondary) }
                         }
                         if let parent = task.parentID { Button("返回父任务") { store.selectedTask = parent } }
-                    }.padding(.horizontal,24).padding(.top,22).padding(.bottom,24)
+                    }.padding(.horizontal,24).padding(.top,18).padding(.bottom,24)
                 }
                 .onChange(of: focusedEntry) { _,entry in if let entry { reader.scrollTo(entry,anchor: .bottom) } }
             }.id(task.id)
@@ -86,8 +86,7 @@ struct TaskDetailView: View {
         guard let id = task?.id, task?.editingMode != mode else { return }
         document.editor?.unmarkText(); document.editor?.didChangeText()
         guard var current = store.tasks.first(where: { $0.id == id }) else { return }
-        TaskDocument.switchMode(&current,to: mode)
-        store.save(current)
+        do { TaskDocument.switchMode(&current,to: mode,baseURL: store.persistence.root); try store.externalizeDocumentImages(&current); store.save(current) } catch { store.error = error.localizedDescription }
         document.activeFormats = []
     }
     func previewPane(_ task: TaskItem) -> some View {
@@ -98,7 +97,7 @@ struct TaskDetailView: View {
                 Button { previewMarkdown = false } label: { Image(systemName: "xmark").font(.system(size: 11)) }.accessibilityLabel("关闭右侧预览")
             }.foregroundStyle(.secondary).padding(.horizontal,18).frame(height: 52)
             Divider()
-            MarkdownPreviewView(source: task.notes).padding(20)
+            MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root).padding(20)
         }.background(ListTheme.canvas)
     }
     func beginEntry(_ entry: String) {
@@ -137,7 +136,7 @@ struct TaskDetailView: View {
                     }
                 } label: { Image(systemName: "plus").foregroundStyle(.tertiary).frame(width: 14,height: 24) }
                     .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.gray).fixedSize().help("插入内容").accessibilityLabel("插入内容")
-                DetailDocumentEditor(text: task.notes,data: task.richText,rich: task.editingMode == .richText,scrolling: true,onError: { store.error = $0 },controller: document,height: $bodyHeight) { text,data in
+                DetailDocumentEditor(text: task.notes,data: task.richText,rich: task.editingMode == .richText,scrolling: true,onError: { store.error = $0 },imageReference: { try store.saveDocumentImage($0,name: $1,to: task.id) },baseURL: store.persistence.root,controller: document,height: $bodyHeight) { text,data in
                     store.mutate(task.id) { $0.notes = text; $0.richText = data }
                 }.id(task.editingMode).frame(height: height).overlay(alignment: .topLeading) {
                     if task.notes.isEmpty { Text(task.editingMode == .markdown ? "输入 Markdown 源码…" : "输入内容，支持 Markdown 快捷语法…").font(.system(size: 14)).foregroundStyle(.tertiary).padding(.top,3).allowsHitTesting(false) }
@@ -323,7 +322,7 @@ struct TaskDetailView: View {
         }
     }
     func printTask(_ task: TaskItem) {
-        let view = TaskPrintDocument.makeView(task: task,children: store.tasks.filter { $0.parentID == task.id && !$0.deleted })
+        let view = TaskPrintDocument.makeView(task: task,children: store.tasks.filter { $0.parentID == task.id && !$0.deleted },baseURL: store.persistence.root)
         let info = NSPrintInfo.shared.copy() as! NSPrintInfo
         info.horizontalPagination = .fit; info.verticalPagination = .automatic
         info.topMargin = 36; info.bottomMargin = 36; info.leftMargin = 36; info.rightMargin = 36
@@ -352,7 +351,7 @@ struct TaskDetailView: View {
                     let directory = folder.appendingPathComponent(filename + "-Markdown-" + UUID().uuidString.prefix(8),isDirectory: true)
                     try FileManager.default.createDirectory(at: directory,withIntermediateDirectories: true)
                     let url = directory.appendingPathComponent(filename + ".md")
-                    try DocumentExport.write(task: task,children: store.tasks.filter { $0.parentID == task.id && !$0.deleted },format: format,to: url)
+                    try DocumentExport.write(task: task,children: store.tasks.filter { $0.parentID == task.id && !$0.deleted },format: format,to: url,baseURL: store.persistence.root)
                     NSWorkspace.shared.activateFileViewerSelecting([url])
                 } catch { store.error = error.localizedDescription }
             }
@@ -362,7 +361,7 @@ struct TaskDetailView: View {
         panel.nameFieldStringValue = (name.isEmpty ? "文档" : String(name.prefix(80))) + "." + format.rawValue
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
-            do { try DocumentExport.write(task: task,children: store.tasks.filter { $0.parentID == task.id && !$0.deleted },format: format,to: url) }
+            do { try DocumentExport.write(task: task,children: store.tasks.filter { $0.parentID == task.id && !$0.deleted },format: format,to: url,baseURL: store.persistence.root) }
             catch { store.error = error.localizedDescription }
         }
     }
