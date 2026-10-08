@@ -45,7 +45,9 @@ import WebKit
     }
     private static let bridge = #"""
     function renderZilo(source) {
-      var md = markdownit({html:false,breaks:false,linkify:false,typographer:false});
+      // Notes preserve the author's Enter presses, including list descriptions.
+      // A trailing Tab is whitespace, not a reason to collapse the following line.
+      var md = markdownit({html:false,breaks:true,linkify:false,typographer:false});
       var codes = [], escape = md.utils.escapeHtml;
       // Common technical identifiers are literal even when legacy notes omit backticks.
       md.inline.ruler.before('emphasis','zilo_identifier',function(state,silent) {
@@ -53,6 +55,22 @@ import WebKit
         if (!match) return false;
         if (!silent) state.pending += match[0];
         state.pos += match[0].length; return true;
+      });
+      // GFM task markers are read-only in preview; edit their source to toggle.
+      md.core.ruler.after('inline','zilo_task_lists',function(state) {
+        var depth=0;
+        state.tokens.forEach(function(token,index) {
+          if (token.type==='list_item_open') depth++;
+          else if (token.type==='list_item_close') depth--;
+          else if (depth && token.type==='inline' && index>1 && state.tokens[index-2].type==='list_item_open' && /^\[[ xX]\][ \t]+/.test(token.content) && token.children && token.children[0] && token.children[0].type==='text') {
+            var first=token.children[0], marker=/^\[([ xX])\][ \t]+/.exec(first.content);
+            if (!marker) return;
+            first.content=first.content.slice(marker[0].length);
+            var checkbox=new state.Token('html_inline','',0);
+            checkbox.content='<input class="task-checkbox" type="checkbox" disabled aria-label="'+(marker[1]===' ' ? '未完成' : '已完成')+'"'+(marker[1]===' ' ? '' : ' checked')+'>';
+            token.children.unshift(checkbox);
+          }
+        });
       });
       md.renderer.rules.fence = function(tokens, index) {
         var token = tokens[index], requested = token.info.trim().split(/\s+/)[0].toLowerCase();
@@ -141,7 +159,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
     <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src zilo-image: data:; style-src 'unsafe-inline'; script-src 'nonce-zilo-preview';"><style>
     :root{color-scheme:light;--bg:#fff;--text:#242730;--muted:#656b78;--border:#e6e8ee;--code:#f5f6f8;--accent:#526ae8;--keyword:#a626a4;--string:#267b42;--number:#986801;--function:#2557a7;--comment:#707785}
     :root[data-dark=true]{color-scheme:dark;--bg:#202126;--text:#eceef4;--muted:#b1b5c0;--border:#383a44;--code:#282a32;--accent:#a4b2ff;--keyword:#db9bdf;--string:#9acd9b;--number:#e9bf83;--function:#99bded;--comment:#9a9fae}
-    *{box-sizing:border-box}html{background:var(--bg);color:var(--text);font:14px/1.65 -apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;-webkit-text-size-adjust:100%}body{margin:0;padding:0 1px 32px;overflow-wrap:anywhere}article{max-width:780px;margin:auto}p{margin:0 0 16px}h1,h2,h3,h4,h5,h6{line-height:1.45;letter-spacing:-.015em;font-weight:650;margin:22px 0 12px}article>:first-child{margin-top:0}h1{font-size:25px}h2{font-size:21px}h3{font-size:18px}h4{font-size:16px}h5,h6{font-size:14px}h1,h2{padding-bottom:8px;border-bottom:1px solid var(--border)}ul,ol{padding-left:25px;margin:8px 0 20px}li{padding-left:3px;margin:6px 0}li>p{margin:4px 0 8px}li>ul,li>ol{margin:4px 0 8px}blockquote{margin:18px 0;padding:2px 0 2px 16px;border-left:3px solid var(--accent);color:var(--muted)}blockquote p:last-child{margin-bottom:0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}code{font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:2px 5px;border-radius:4px}pre code{background:transparent;padding:0;border-radius:0;white-space:pre;overflow-wrap:normal}.code-card{margin:18px 0 22px;border:1px solid var(--border);border-radius:9px;background:var(--code);overflow:hidden}.code-card header{display:flex;align-items:center;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--border);font-size:11px;line-height:1.4;color:var(--muted)}.code-card header a{font-size:11px;padding:2px 4px}pre{margin:0;padding:14px 16px;overflow-x:auto;line-height:1.65;tab-size:4}img{display:block;max-width:100%;max-height:480px;object-fit:contain;margin:14px 0;border-radius:6px}table{display:block;overflow-x:auto;border-collapse:collapse;margin:18px 0;font-size:13px}th,td{padding:8px 12px;border:1px solid var(--border);min-width:80px}th{background:var(--code);font-weight:600}hr{border:0;border-top:1px solid var(--border);margin:24px 0}.empty,.missing-image{color:var(--muted)}.hljs-keyword,.hljs-selector-tag,.hljs-meta{color:var(--keyword)}.hljs-string,.hljs-regexp,.hljs-addition,.hljs-attribute{color:var(--string)}.hljs-number,.hljs-literal,.hljs-symbol,.hljs-bullet{color:var(--number)}.hljs-title,.hljs-built_in,.hljs-type,.hljs-section{color:var(--function)}.hljs-comment,.hljs-quote{color:var(--comment);font-style:italic}.hljs-deletion{color:#c54747}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:bold}
+    *{box-sizing:border-box}html{background:var(--bg);color:var(--text);font:14px/1.65 -apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;-webkit-text-size-adjust:100%}body{margin:0;padding:0 1px 32px;overflow-wrap:anywhere}article{max-width:780px;margin:auto}p{margin:0 0 16px}h1,h2,h3,h4,h5,h6{line-height:1.45;letter-spacing:-.015em;font-weight:650;margin:22px 0 12px}article>:first-child{margin-top:0}h1{font-size:25px}h2{font-size:21px}h3{font-size:18px}h4{font-size:16px}h5,h6{font-size:14px}h1,h2{padding-bottom:8px;border-bottom:1px solid var(--border)}ul,ol{padding-left:25px;margin:8px 0 20px}li{padding-left:3px;margin:6px 0}li>p{margin:4px 0 8px}li>ul,li>ol{margin:4px 0 8px}blockquote{margin:18px 0;padding:2px 0 2px 16px;border-left:3px solid var(--accent);color:var(--muted)}blockquote p:last-child{margin-bottom:0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}code{font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:2px 5px;border-radius:4px}pre code{background:transparent;padding:0;border-radius:0;white-space:pre;overflow-wrap:normal}.code-card{margin:18px 0 22px;border:1px solid var(--border);border-radius:9px;background:var(--code);overflow:hidden}.code-card header{display:flex;align-items:center;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--border);font-size:11px;line-height:1.4;color:var(--muted)}.code-card header a{font-size:11px;padding:2px 4px}pre{margin:0;padding:14px 16px;overflow-x:auto;line-height:1.65;tab-size:4}img{display:block;max-width:100%;max-height:480px;object-fit:contain;margin:14px 0;border-radius:6px}table{display:block;overflow-x:auto;border-collapse:collapse;margin:18px 0;font-size:13px}th,td{padding:8px 12px;border:1px solid var(--border);min-width:80px}th{background:var(--code);font-weight:600}hr{border:0;border-top:1px solid var(--border);margin:24px 0}.task-checkbox{width:14px;height:14px;margin:0 7px 0 0;vertical-align:-2px;accent-color:var(--accent)}.empty,.missing-image{color:var(--muted)}.hljs-keyword,.hljs-selector-tag,.hljs-meta{color:var(--keyword)}.hljs-string,.hljs-regexp,.hljs-addition,.hljs-attribute{color:var(--string)}.hljs-number,.hljs-literal,.hljs-symbol,.hljs-bullet{color:var(--number)}.hljs-title,.hljs-built_in,.hljs-type,.hljs-section{color:var(--function)}.hljs-comment,.hljs-quote{color:var(--comment);font-style:italic}.hljs-deletion{color:#c54747}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:bold}
     </style></head><body><article id="document" aria-label="Markdown 预览正文"></article><script nonce="zilo-preview">function updatePreview(html,dark){var x=window.scrollX,y=window.scrollY;document.documentElement.dataset.dark=String(dark);document.getElementById('document').innerHTML=html;window.scrollTo(x,y);}</script></body></html>
     """#
 }

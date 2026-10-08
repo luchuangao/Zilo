@@ -131,6 +131,7 @@ final class DocumentEditorController: ObservableObject {
         editor.window?.makeFirstResponder(editor)
         let range = editor.selectedRange()
         defer { refreshSelection() }
+        if !rich { MarkdownSourceEditing.apply(format,in: editor); return }
         if rich && format == .codeBlock { MarkdownTyping.insertCodeBlock(in: editor); return }
         if rich, [.bold,.italic,.heading,.underline,.strike,.code,.quote].contains(format) {
             let attributes = range.length > 0 ? editor.textStorage?.attributes(at: range.location,effectiveRange: nil) ?? [:] : editor.typingAttributes
@@ -231,6 +232,8 @@ struct DetailDocumentEditor: NSViewRepresentable {
     }
     func populate(_ editor: NSTextView) {
         editor.isRichText = rich
+        editor.isAutomaticTextReplacementEnabled = rich
+        editor.isAutomaticSpellingCorrectionEnabled = rich
         if rich, let data, let attributed = RichDocument.decode(data) {
             let display = NSMutableAttributedString(attributedString: attributed)
             attributed.enumerateAttribute(.foregroundColor,in: NSRange(location: 0,length: attributed.length)) { value,range,_ in
@@ -315,7 +318,8 @@ struct DetailDocumentEditor: NSViewRepresentable {
             editor.enclosingScrollView?.needsLayout = true
         }
         func textView(_ textView: NSTextView,doCommandBy commandSelector: Selector) -> Bool {
-            guard parent.rich, !textView.hasMarkedText() else { return false }
+            guard !textView.hasMarkedText() else { return false }
+            if !parent.rich { return MarkdownSourceEditing.handle(commandSelector,in: textView) }
             if commandSelector == #selector(NSResponder.insertNewline(_:)) { return MarkdownTyping.insertNewline(in: textView) }
             if commandSelector == #selector(NSResponder.insertTab(_:)), MarkdownTyping.isCodeBlock(textView.typingAttributes) {
                 textView.insertText("\t",replacementRange: textView.selectedRange()); return true
@@ -702,5 +706,180 @@ enum MarkdownTyping {
     private static func replace(in editor: NSTextView,range: NSRange,with text: String,attributes: [NSAttributedString.Key: Any]) {
         editor.insertText(NSAttributedString(string: text,attributes: attributes),replacementRange: range)
         editor.typingAttributes = attributes
+    }
+}
+
+/// Editing commands for literal Markdown. Only explicit keyboard/toolbar actions
+/// modify the source, using native replacements so undo and IME remain intact.
+enum MarkdownSourceEditing {
+    static func handle(_ command: Selector,in editor: NSTextView) -> Bool {
+        guard !editor.isRichText,!editor.hasMarkedText() else { return false }
+        switch command {
+        case #selector(NSResponder.insertNewline(_:)): return newline(in: editor)
+        case #selector(NSResponder.insertLineBreak(_:)):
+            editor.insertText("\n",replacementRange: editor.selectedRange()); return true
+        case #selector(NSResponder.insertTab(_:)): indent(in: editor,outdent: false); return true
+        case #selector(NSResponder.insertBacktab(_:)): indent(in: editor,outdent: true); return true
+        default: return false
+        }
+    }
+    private static func match(_ pattern: String,_ value: String) -> NSTextCheckingResult? {
+        (try? NSRegularExpression(pattern: pattern))?.firstMatch(in: value,range: NSRange(location: 0,length: value.utf16.count))
+    }
+    private static func group(_ index: Int,_ result: NSTextCheckingResult,_ text: String) -> String {
+        let range = result.range(at: index)
+        return range.location == NSNotFound ? "" : (text as NSString).substring(with: range)
+    }
+    private static func insideFence(_ text: NSString,before end: Int) -> Bool {
+        var fence: (Character,Int)?
+        for line in text.substring(to: end).components(separatedBy: .newlines) {
+            guard let m = match(#"^ {0,3}(`{3,}|~{3,})(.*)$"#,line) else { continue }
+            let marker = group(1,m,line), rest = group(2,m,line)
+            if let open = fence {
+                if marker.first == open.0,marker.count >= open.1,rest.trimmingCharacters(in: .whitespaces).isEmpty { fence = nil }
+            } else if marker.first == "~" || !rest.contains("`") { fence = (marker.first!,marker.count) }
+        }
+        return fence != nil
+    }
+    @discardableResult static func newline(in editor: NSTextView) -> Bool {
+        guard !editor.isRichText,!editor.hasMarkedText() else { return false }
+        let text = editor.string as NSString,selection = editor.selectedRange()
+        guard selection.length == 0,selection.location <= text.length else { return false }
+        let line = text.lineRange(for: selection)
+        let input = text.substring(with: NSRange(location: line.location,length: selection.location - line.location))
+        let full = text.substring(with: line).trimmingCharacters(in: .newlines)
+        let indentation = String(input.prefix { $0 == " " || $0 == "\t" })
+        if insideFence(text,before: line.location) {
+            editor.insertText("\n" + indentation,replacementRange: selection); return true
+        }
+        guard let m = match(#"^([ \t]*)((?:>[ \t]*)*)(?:([-+*])([ \t]+)|(\d{1,9})([.)])([ \t]+))?(\[[ xX]\][ \t]+)?"#,input) else { return false }
+        let indent = group(1,m,input),quote = group(2,m,input),bullet = group(3,m,input),number = group(5,m,input)
+        let task = group(8,m,input)
+        let hasList = !bullet.isEmpty || !number.isEmpty
+        guard hasList || !quote.isEmpty else {
+            if !indentation.isEmpty { editor.insertText("\n" + indentation,replacementRange: selection); return true }
+            return false
+        }
+        let prefix = (input as NSString).substring(with: m.range)
+        // Do not duplicate a marker when splitting before its content begins.
+        guard selection.location >= line.location + m.range.length else { return false }
+        let body = (full as NSString).substring(from: min(m.range.length,full.utf16.count))
+        if body.trimmingCharacters(in: .whitespaces).isEmpty {
+            var replacement = ""
+            if hasList,!indent.isEmpty {
+                replacement = removeIndent(indent) + String(prefix.dropFirst(indent.count))
+            } else if hasList,!quote.isEmpty {
+                replacement = indent + quote
+            } else if !quote.isEmpty {
+                let shortened = quote.replacingOccurrences(of: #">[ \t]*$"#,with: "",options: .regularExpression)
+                replacement = indent + shortened
+            }
+            editor.insertText(replacement,replacementRange: NSRange(location: line.location,length: full.utf16.count))
+            return true
+        }
+        var marker = indent + quote
+        if !bullet.isEmpty { marker += bullet + " " }
+        else if let value = Int(number) { marker += String(min(999_999_999,value + 1)) + group(6,m,input) + " " }
+        if hasList,!task.isEmpty { marker += "[ ] " }
+        editor.insertText("\n" + marker,replacementRange: selection)
+        return true
+    }
+    private static func removeIndent(_ value: String) -> String {
+        if value.hasPrefix("\t") { return String(value.dropFirst()) }
+        return String(value.dropFirst(min(4,value.prefix { $0 == " " }.count)))
+    }
+    private static func linesRange(_ selection: NSRange,in text: NSString) -> NSRange {
+        var range = selection
+        if range.length > 0,text.character(at: NSMaxRange(range) - 1) == 10 { range.length -= 1 }
+        return text.lineRange(for: range)
+    }
+    static func indent(in editor: NSTextView,outdent: Bool) {
+        guard !editor.isRichText,!editor.hasMarkedText() else { return }
+        let text = editor.string as NSString,selection = editor.selectedRange()
+        let range = linesRange(selection,in: text),block = text.substring(with: range)
+        // Within prose or code, a single Tab inserts a literal tab at the caret.
+        if !outdent,selection.length == 0,
+           match(#"^[ \t]*(?:>[ \t]*)*(?:[-+*]|\d{1,9}[.)])[ \t]+"#,block) == nil {
+            editor.insertText("\t",replacementRange: selection); return
+        }
+        var replacement = "", originalOffset = 0, edits: [(Int,Int)] = []
+        let lines = block.components(separatedBy: "\n")
+        for (index,line) in lines.enumerated() {
+            if index == lines.count - 1,line.isEmpty,index > 0 { break }
+            let adjusted = outdent ? removeIndent(line) : "    " + line
+            edits.append((range.location + originalOffset,adjusted.utf16.count - line.utf16.count))
+            replacement += adjusted
+            if index < lines.count - 1 { replacement += "\n" }
+            originalOffset += line.utf16.count + 1
+        }
+        if replacement == block { return }
+        func mapped(_ position: Int) -> Int {
+            var result = position
+            for (start,delta) in edits where start <= position {
+                result += delta < 0 ? -min(-delta,position - start) : delta
+            }
+            return result
+        }
+        let start = mapped(selection.location),end = mapped(NSMaxRange(selection))
+        editor.insertText(replacement,replacementRange: range)
+        editor.setSelectedRange(NSRange(location: start,length: max(0,end - start)))
+    }
+    static func apply(_ format: DocumentFormat,in editor: NSTextView) {
+        guard !editor.isRichText,!editor.hasMarkedText(),format != .underline else { return }
+        let text = editor.string as NSString,selection = editor.selectedRange()
+        if [.heading,.bullet,.numbered,.quote].contains(format) {
+            let range = linesRange(selection,in: text),block = text.substring(with: range)
+            var lines = block.components(separatedBy: "\n")
+            let finalEmpty = lines.last == "" && lines.count > 1
+            if finalEmpty { lines.removeLast() }
+            let pattern: String
+            switch format {
+            case .heading: pattern = #"^([ \t]*)#{1,6}[ \t]+"#
+            case .bullet: pattern = #"^([ \t]*)[-+*][ \t]+"#
+            case .numbered: pattern = #"^([ \t]*)\d{1,9}[.)][ \t]+"#
+            default: pattern = #"^([ \t]*)>[ \t]?"#
+            }
+            let removing = lines.allSatisfy { match(pattern,$0) != nil }
+            let result = lines.enumerated().map { index,line -> String in
+                let indent = String(line.prefix { $0 == " " || $0 == "\t" })
+                if let m = match(pattern,line),removing {
+                    return indent + (line as NSString).substring(from: NSMaxRange(m.range))
+                }
+                let body: String
+                if format == .heading,let m = match(pattern,line) { body = (line as NSString).substring(from: NSMaxRange(m.range)) }
+                else if [.bullet,.numbered].contains(format),let m = match(#"^([ \t]*)(?:[-+*]|\d{1,9}[.)])[ \t]+"#,line) { body = (line as NSString).substring(from: NSMaxRange(m.range)) }
+                else { body = String(line.dropFirst(indent.count)) }
+                let marker = format == .heading ? "## " : format == .bullet ? "- " : format == .numbered ? "\(index + 1). " : "> "
+                return indent + marker + body
+            }.joined(separator: "\n") + (finalEmpty ? "\n" : "")
+            editor.insertText(result,replacementRange: range)
+            if selection.length > 0 { editor.setSelectedRange(NSRange(location: range.location,length: result.utf16.count)) }
+            return
+        }
+        let selected = text.substring(with: selection)
+        let replacement: String,caretOffset: Int
+        switch format {
+        case .bold,.italic,.strike,.code:
+            var wrapper = format == .bold ? "**" : format == .italic ? "*" : format == .strike ? "~~" : "`"
+            if format == .code {
+                let longest = selected.components(separatedBy: CharacterSet(charactersIn: "`" ).inverted).map(\.count).max() ?? 0
+                wrapper = String(repeating: "`",count: max(1,longest + 1))
+            }
+            let toggled = format != .code && selected.hasPrefix(wrapper) && selected.hasSuffix(wrapper) && selected.utf16.count >= wrapper.utf16.count * 2
+            let padding = format == .code && (selected.hasPrefix("`") || selected.hasSuffix("`") || (selected.hasPrefix(" ") && selected.hasSuffix(" ") && !selected.trimmingCharacters(in: .whitespaces).isEmpty)) ? " " : ""
+            replacement = toggled ? String(selected.dropFirst(wrapper.count).dropLast(wrapper.count)) : wrapper + padding + selected + padding + wrapper
+            caretOffset = wrapper.utf16.count
+        case .codeBlock:
+            let longest = selected.components(separatedBy: CharacterSet(charactersIn: "`" ).inverted).map(\.count).max() ?? 0
+            let fence = String(repeating: "`",count: max(3,longest + 1))
+            let prefix = selection.location > 0 && text.character(at: selection.location - 1) != 10 ? "\n" : ""
+            let suffix = NSMaxRange(selection) < text.length && text.character(at: NSMaxRange(selection)) != 10 ? "\n" : ""
+            replacement = prefix + fence + "\n" + selected + (selected.hasSuffix("\n") ? "" : "\n") + fence + suffix
+            caretOffset = prefix.utf16.count + fence.utf16.count + 1
+        default:
+            replacement = format.markdown(selected); caretOffset = 0
+        }
+        editor.insertText(replacement,replacementRange: selection)
+        editor.setSelectedRange(NSRange(location: selection.location + (selection.length == 0 ? caretOffset : 0),length: selection.length == 0 ? 0 : replacement.utf16.count))
     }
 }

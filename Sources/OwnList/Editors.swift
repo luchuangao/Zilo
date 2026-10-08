@@ -253,7 +253,7 @@ struct TaskDetailView: View {
             .shadow(color: .black.opacity(0.07),radius: 8,y: 2).fixedSize(horizontal: false,vertical: true)
     }
     @ViewBuilder func formatButtons(_ task: TaskItem) -> some View {
-        ForEach(DocumentFormat.allCases,id: \.self) { format in
+        ForEach(DocumentFormat.allCases.filter { task.editingMode == .richText || $0 != .underline },id: \.self) { format in
             if format == .bold || format == .bullet || format == .link { Divider().frame(height: 18).padding(.horizontal,3) }
             Button { applyFormat(format) } label: {
                 Group { if format == .heading { Text("H").font(.system(size: 17)) } else { Image(systemName: format.symbol) } }.frame(width: 27,height: 28)

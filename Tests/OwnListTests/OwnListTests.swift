@@ -704,7 +704,7 @@ final class OwnListTests: XCTestCase {
         XCTAssertGreaterThan(TaskPrintDocument.makeView(task: task).frame.height,1000)
     }
     @MainActor func testDocumentFormattingPreservesUnicodeSelectionAndSurroundingText() {
-        let editor = NSTextView()
+        let editor = NSTextView(); editor.isRichText = false
         editor.string = "前缀 中文🙂 后缀"
         let selected = (editor.string as NSString).range(of: "中文🙂")
         editor.setSelectedRange(selected)
@@ -816,6 +816,29 @@ private final class MarkdownUndoTextView: NSTextView {
 }
 
 extension OwnListTests {
+    @MainActor func testMarkdownPreviewPreservesNoteLineBreaks() {
+        let source = "- 指标名称 metric\t\n" +
+            "prometheus 内置建立的规范就是叫 metric（即 __name__）。\n" +
+            "指标名称以 _total 结尾。\n\n" +
+            "- 服务名称 service\n服务名称需要全局唯一。\n"
+        let rendered = MarkdownRenderer.shared.render(source)
+        XCTAssertTrue(rendered.html.contains("指标名称 metric\t<br>\nprometheus"))
+        XCTAssertTrue(rendered.html.contains("__name__）。<br>\n指标名称以 _total 结尾。"))
+        XCTAssertTrue(rendered.html.contains("服务名称 service<br>\n服务名称需要全局唯一。"))
+        XCTAssertEqual(rendered.html.components(separatedBy: "<li>").count - 1,2)
+        XCTAssertEqual(rendered.codes,[])
+
+        let paragraphs = MarkdownRenderer.shared.render("第一行\n第二行\n\n另一段\r\n下一行\n").html
+        XCTAssertEqual(paragraphs,"<p>第一行<br>\n第二行</p>\n<p>另一段<br>\n下一行</p>\n")
+        let nested = MarkdownRenderer.shared.render("- 父项\n  说明\n  - 子项\n    子项说明\n").html
+        XCTAssertEqual(nested.components(separatedBy: "<ul>").count - 1,2)
+        XCTAssertTrue(nested.contains("父项<br>\n说明"))
+        XCTAssertTrue(nested.contains("子项<br>\n子项说明"))
+        let code = "\tprint(\"第一行\")\n\tprint(\"第二行\")\n"
+        let fence = MarkdownRenderer.shared.render("```python\n" + code + "```\n")
+        XCTAssertEqual(fence.codes,[code])
+        XCTAssertFalse(fence.html.contains("<br>"),"正文换行规则不改变代码块")
+    }
     @MainActor func testMarkdownPreviewCommonMarkIdentifiersAndLayout() {
         let source = "## 标签\n\nnginx_upstream_check_module __name__ _total **粗体** _斜体_\n\n- 项目一\n  - 嵌套项\n\n| 字段 | 值 |\n| --- | --- |\n| 名称 | 中文😀 |\n"
         let html = MarkdownRenderer.shared.render(source).html
@@ -881,5 +904,108 @@ extension OwnListTests {
         let escaped = root.appendingPathComponent("Attachments/Images/escaped")
         try FileManager.default.createSymbolicLink(at:escaped,withDestinationURL:root.deletingLastPathComponent())
         XCTAssertNil(MarkdownRenderer.imageURL(URL(string:"zilo-image://local/Attachments/Images/escaped/private.txt")!,root:root))
+    }
+}
+
+extension OwnListTests {
+    @MainActor private func sourceEditor(_ source: String) -> MarkdownUndoTextView {
+        let editor = MarkdownUndoTextView(); editor.isRichText = false; editor.allowsUndo = true
+        editor.string = source; editor.setSelectedRange(NSRange(location: source.utf16.count,length: 0))
+        return editor
+    }
+    @MainActor func testMarkdownSourceListQuoteAndTaskContinuation() {
+        for (source,expected) in [
+            ("- 中文😀","- 中文😀\n- "),("* 项目","* 项目\n* "),
+            ("9. 编号","9. 编号\n10. "),("4) 项目","4) 项目\n5) "),
+            ("  - 子项","  - 子项\n  - "),("> 引用","> 引用\n> "),
+            ("> - 项目","> - 项目\n> - "),("- [x] 完成","- [x] 完成\n- [ ] "),
+            ("- ",""),("> ",""),("> > ","> "),("    - ","- "),("> - ","> ")
+        ] {
+            let editor = sourceEditor(source)
+            XCTAssertTrue(MarkdownSourceEditing.newline(in: editor),source)
+            XCTAssertEqual(editor.string,expected,source)
+        }
+        let split = sourceEditor("- 中文😀尾部")
+        split.setSelectedRange(NSRange(location: "- 中文😀".utf16.count,length: 0))
+        XCTAssertTrue(MarkdownSourceEditing.newline(in: split)); XCTAssertEqual(split.string,"- 中文😀\n- 尾部")
+        let ordinary = sourceEditor("说明文字")
+        XCTAssertFalse(MarkdownSourceEditing.newline(in: ordinary)); XCTAssertEqual(ordinary.string,"说明文字")
+        let soft = sourceEditor("- 指标名称")
+        XCTAssertTrue(MarkdownSourceEditing.handle(#selector(NSResponder.insertLineBreak(_:)),in: soft))
+        XCTAssertEqual(soft.string,"- 指标名称\n")
+    }
+    @MainActor func testMarkdownSourceFenceIndentationAndMarkedText() {
+        for fence in ["```python","~~~~bash"] {
+            let editor = sourceEditor(fence + "\n    - literal")
+            XCTAssertTrue(MarkdownSourceEditing.newline(in: editor))
+            XCTAssertEqual(editor.string,fence + "\n    - literal\n    ")
+        }
+        let closed = sourceEditor("```\n- literal\n```\n- 项目")
+        XCTAssertTrue(MarkdownSourceEditing.newline(in: closed)); XCTAssertTrue(closed.string.hasSuffix("\n- 项目\n- "))
+        let windows = sourceEditor("```\r\n- literal\r\n```\r\n- 项目")
+        XCTAssertTrue(MarkdownSourceEditing.newline(in: windows)); XCTAssertEqual(windows.string,"```\r\n- literal\r\n```\r\n- 项目\n- ")
+        let composing = sourceEditor("- 已提交")
+        composing.setMarkedText("候选",selectedRange: NSRange(location: 2,length: 0),replacementRange: composing.selectedRange())
+        let original = composing.string
+        XCTAssertFalse(MarkdownSourceEditing.handle(#selector(NSResponder.insertNewline(_:)),in: composing))
+        MarkdownSourceEditing.indent(in: composing,outdent: false)
+        MarkdownSourceEditing.apply(.bold,in: composing)
+        XCTAssertEqual(composing.string,original)
+    }
+    @MainActor func testMarkdownSourceIndentSelectionUndoAndRedo() {
+        let editor = sourceEditor("- 中文😀\n- 第二项\n尾部")
+        let selection = NSRange(location: 2,length: "中文😀\n- 第二项\n".utf16.count)
+        editor.setSelectedRange(selection)
+        let before = editor.string
+        editor.localUndo.beginUndoGrouping()
+        MarkdownSourceEditing.indent(in: editor,outdent: false)
+        editor.localUndo.endUndoGrouping()
+        XCTAssertEqual(editor.string,"    - 中文😀\n    - 第二项\n尾部")
+        XCTAssertEqual(editor.selectedRange().location,6)
+        editor.localUndo.undo(); XCTAssertEqual(editor.string,before)
+        editor.localUndo.redo(); XCTAssertEqual(editor.string,"    - 中文😀\n    - 第二项\n尾部")
+        editor.setSelectedRange(NSRange(location: 0,length: "    - 中文😀\n    - 第二项\n".utf16.count))
+        MarkdownSourceEditing.indent(in: editor,outdent: true); XCTAssertEqual(editor.string,before)
+        let single = sourceEditor("普通正文")
+        MarkdownSourceEditing.indent(in: single,outdent: false); XCTAssertEqual(single.string,"普通正文\t")
+        let mixed = sourceEditor("\t第一行\n  第二行\n第三行")
+        mixed.setSelectedRange(NSRange(location: 0,length: mixed.string.utf16.count))
+        MarkdownSourceEditing.indent(in: mixed,outdent: true)
+        XCTAssertEqual(mixed.string,"第一行\n第二行\n第三行")
+        XCTAssertEqual(mixed.selectedRange(),NSRange(location: 0,length: mixed.string.utf16.count))
+    }
+    @MainActor func testMarkdownSourceToolbarUsesWholeLinesAndSafeCodeFences() {
+        let editor = sourceEditor("前文 中文😀 后文\n第二行")
+        editor.setSelectedRange(NSRange(location: 3,length: "中文😀".utf16.count))
+        MarkdownSourceEditing.apply(.bullet,in: editor)
+        XCTAssertEqual(editor.string,"- 前文 中文😀 后文\n第二行")
+        MarkdownSourceEditing.apply(.bullet,in: editor); XCTAssertEqual(editor.string,"前文 中文😀 后文\n第二行")
+        let converted = sourceEditor("- 项目一\n- 项目二")
+        converted.setSelectedRange(NSRange(location: 0,length: converted.string.utf16.count))
+        MarkdownSourceEditing.apply(.numbered,in: converted)
+        XCTAssertEqual(converted.string,"1. 项目一\n2. 项目二")
+        let inline = sourceEditor("")
+        MarkdownSourceEditing.apply(.bold,in: inline)
+        XCTAssertEqual(inline.string,"****"); XCTAssertEqual(inline.selectedRange().location,2)
+        inline.insertText("中文😀",replacementRange: inline.selectedRange()); XCTAssertEqual(inline.string,"**中文😀**")
+        inline.setSelectedRange(NSRange(location: 0,length: inline.string.utf16.count))
+        MarkdownSourceEditing.apply(.bold,in: inline); XCTAssertEqual(inline.string,"中文😀")
+        let code = sourceEditor("```swift\nlet value = 1\n```")
+        code.setSelectedRange(NSRange(location: 0,length: code.string.utf16.count))
+        let original = code.string
+        MarkdownSourceEditing.apply(.codeBlock,in: code)
+        XCTAssertTrue(code.string.hasPrefix("````\n"))
+        XCTAssertEqual(MarkdownRenderer.shared.render(code.string).codes,[original + "\n"])
+        let ticks = sourceEditor("`中文`")
+        ticks.setSelectedRange(NSRange(location: 0,length: ticks.string.utf16.count))
+        MarkdownSourceEditing.apply(.code,in: ticks)
+        XCTAssertEqual(MarkdownRenderer.shared.render(ticks.string).html,"<p><code>`中文`</code></p>\n")
+    }
+    @MainActor func testMarkdownPreviewTaskListsAreReadOnlyAndEscaped() {
+        let html = MarkdownRenderer.shared.render("- [ ] 未完成\n- [x] 已完成\n- \\[ ] 普通符号\n\n[x] 普通正文\n").html
+        XCTAssertEqual(html.components(separatedBy: "class=\"task-checkbox\"").count - 1,2)
+        XCTAssertTrue(html.contains("disabled aria-label=\"已完成\" checked"))
+        XCTAssertTrue(html.contains("disabled aria-label=\"未完成\""))
+        XCTAssertTrue(html.contains("[ ] 普通符号")); XCTAssertTrue(html.contains("<p>[x] 普通正文</p>"))
     }
 }
