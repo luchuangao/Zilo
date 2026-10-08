@@ -466,43 +466,6 @@ final class DocumentScrollView: NSScrollView {
     }
 }
 
-/// Read-only preview owns its native view; it never replaces the source editor
-/// or becomes the target of formatting commands. Re-render only changed source.
-struct MarkdownPreviewView: NSViewRepresentable {
-    var source: String
-    var baseURL: URL?
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    func makeNSView(context: Context) -> DocumentScrollView {
-        let scroll = DocumentScrollView()
-        scroll.fitsContent = false; scroll.drawsBackground = false; scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.scrollerStyle = .overlay
-        let editor = DocumentTextView()
-        editor.isRichText = true; editor.isEditable = false; editor.isSelectable = true; editor.allowsUndo = false
-        editor.drawsBackground = false; editor.isVerticallyResizable = true; editor.isHorizontallyResizable = false
-        editor.autoresizingMask = [.width]; editor.textContainerInset = NSSize(width: 0,height: 3)
-        editor.textContainer?.lineFragmentPadding = 0; editor.textContainer?.widthTracksTextView = true
-        editor.setAccessibilityLabel("Markdown 预览正文")
-        scroll.documentView = editor
-        context.coordinator.render(source,in: scroll,baseURL: baseURL)
-        return scroll
-    }
-    func updateNSView(_ view: DocumentScrollView,context: Context) { context.coordinator.render(source,in: view,baseURL: baseURL) }
-    final class Coordinator {
-        private var lastSource: String?
-        private var lastBaseURL: URL?
-        func render(_ source: String,in view: DocumentScrollView,baseURL: URL? = nil) {
-            guard source != lastSource || baseURL != lastBaseURL, let editor = view.documentView as? NSTextView else { return }
-            lastSource = source; lastBaseURL = baseURL
-            let offset = view.contentView.bounds.origin
-            let content = source.isEmpty ? NSAttributedString(string: "预览将在这里显示",attributes: [.font: NSFont.systemFont(ofSize: 14),.foregroundColor: NSColor.tertiaryLabelColor]) : MarkdownDocument.parse(source,baseURL: baseURL).content
-            editor.textStorage?.setAttributedString(content)
-            view.layout()
-            view.contentView.scroll(to: NSPoint(x: 0,y: min(offset.y,max(0,editor.frame.height - view.contentSize.height))))
-            view.reflectScrolledClipView(view.contentView)
-        }
-    }
-}
-
 struct RichTextEditor: NSViewRepresentable {
     var text: String; var data: Data?; var onChange: (String,Data?) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }

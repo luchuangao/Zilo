@@ -109,7 +109,7 @@ enum MarkdownDocument {
     }
     private static func inline(_ text: String, attributes: [NSAttributedString.Key: Any], baseURL: URL?, warnings: inout [String]) -> NSAttributedString {
         let output = NSMutableAttributedString(string: "")
-        let pattern = #"(?<!\\)(?:!\[([^\]]*)\]\((<[^>]+>|[^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|(`+)(.+?)\5|\*\*(.+?)\*\*|__(.+?)__|~~(.+?)~~|\*([^*]+)\*|_([^_]+)_)"#
+        let pattern = #"(?<!\\)(?:!\[([^\]]*)\]\((<[^>]+>|[^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|(`+)(.+?)\5|\*\*(.+?)\*\*|(?<![\p{L}\p{N}_])__(?!(?:name|init|main|file|all|version|doc|dict|class|repr|str)__)(.+?)__(?![\p{L}\p{N}_])|~~(.+?)~~|\*([^*]+)\*|(?<![\p{L}\p{N}_])_([^_]+)_(?![\p{L}\p{N}_]))"#
         let regex = try! NSRegularExpression(pattern: pattern)
         let source = text as NSString; var offset = 0
         for match in regex.matches(in: text, range: NSRange(location: 0, length: source.length)) {

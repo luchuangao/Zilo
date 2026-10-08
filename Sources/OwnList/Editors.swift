@@ -35,7 +35,7 @@ struct TaskDetailView: View {
                         detailContent(task,documentHeight: max(220,geometry.size.height - (showFormatting ? 270 : 225)))
                             .ignoresSafeArea(.container,edges: .top).frame(minWidth: 300,maxWidth: .infinity,maxHeight: .infinity)
                         if task.editingMode == .markdown && previewMarkdown {
-                            previewPane(task).ignoresSafeArea(.container,edges: .top).frame(minWidth: 220,idealWidth: 320,maxWidth: .infinity,maxHeight: .infinity)
+                            previewPane(task).ignoresSafeArea(.container,edges: .top).frame(minWidth: 260,idealWidth: 340,maxWidth: .infinity,maxHeight: .infinity)
                         }
                     }
                 }

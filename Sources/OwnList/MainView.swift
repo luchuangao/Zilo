@@ -65,11 +65,11 @@ struct MainView: View {
                         TaskWorkspace(tasks: sortedTasks,viewMode: viewMode,showCompleted: showCompleted,listID: selectedListID,isTrash: selection == "trash",isTemplates: selection == "templates",sort: sort,creationContext: selection,showSummaries: showSummaries).id(selection)
                     }.ignoresSafeArea(.container,edges: .top).frame(minWidth: 320,idealWidth: 380,maxWidth: detailsVisible ? max(320,(geometry.size.width - 65 - (sidebarVisible ? 220 : 0) - (parallel ? 310 : 0)) * 0.40) : .infinity,maxHeight: .infinity,alignment: .top)
                     if parallel { CalendarView(compact: true).frame(minWidth: 310,idealWidth: 380) }
-                    if detailsVisible { TaskDetailView().ignoresSafeArea(.container,edges: .top).frame(minWidth: showingMarkdownPreview ? 540 : 340,idealWidth: 480,maxWidth: .infinity,maxHeight: .infinity) }
+                    if detailsVisible { TaskDetailView().ignoresSafeArea(.container,edges: .top).frame(minWidth: showingMarkdownPreview ? 620 : 340,idealWidth: 480,maxWidth: .infinity,maxHeight: .infinity) }
                 }
             } else { Group { switch module { case .calendar: CalendarView(); case .matrix: MatrixView(); case .focus: FocusView(); case .habits: HabitsView(); case .stats: StatisticsView(); case .tasks: EmptyView() } }.frame(maxWidth: .infinity,maxHeight: .infinity) }
         }.frame(maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
-        }.ignoresSafeArea(.container,edges: .top).background(ListTheme.canvas).foregroundStyle(ListTheme.text).font(.system(size: fontScale)).tint(accent.listColor).accentColor(accent.listColor).frame(minWidth: (parallel ? 1240 : 1000) + (showingMarkdownPreview ? 200 : 0),minHeight: 620)
+        }.ignoresSafeArea(.container,edges: .top).background(WindowChrome()).background(ListTheme.canvas).foregroundStyle(ListTheme.text).font(.system(size: fontScale)).tint(accent.listColor).accentColor(accent.listColor).frame(minWidth: (parallel ? 1240 : 1000) + (showingMarkdownPreview ? 260 : 0),minHeight: 620)
             .onChange(of: selection) { _,_ in listOptionsVisible = false; store.selectedTask = nil; search = ""; viewMode = store.lists.first { $0.id == selectedListID }?.defaultView ?? "列表" }
             .onChange(of: viewMode) { _,value in if let id = selectedListID, var list = store.lists.first(where: { $0.id == id }), list.defaultView != value { list.defaultView = value; store.save(list,undoable: false) } }
             .onChange(of: searchVisible) { _,visible in if visible { DispatchQueue.main.async { searchFocused = true } } else { search = "" } }

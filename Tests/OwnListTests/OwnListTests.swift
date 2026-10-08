@@ -1,6 +1,7 @@
 import XCTest
 import AppKit
 import PDFKit
+import WebKit
 @testable import OwnList
 
 final class OwnListTests: XCTestCase {
@@ -275,19 +276,31 @@ final class OwnListTests: XCTestCase {
         let pdf = try XCTUnwrap(PDFDocument(url: folder.appendingPathComponent("sample.pdf"))); XCTAssertTrue(pdf.string?.precomposedStringWithCompatibilityMapping.contains("尾部文字") == true)
     }
 
-    @MainActor func testPreviewUpdatesIndependentlyAndRetainsScroll() throws {
-        let view = DocumentScrollView(frame: NSRect(x: 0,y: 0,width: 300,height: 160)); view.fitsContent = false
-        let preview = DocumentTextView(frame: view.bounds); preview.isRichText = true; preview.isEditable = false
-        preview.isVerticallyResizable = true; view.documentView = preview
+    @MainActor func testPreviewUpdatesIndependentlyAndRetainsScroll() async throws {
+        let view = WKWebView(frame: NSRect(x: 0,y: 0,width: 300,height: 160))
         let coordinator = MarkdownPreviewView.Coordinator()
-        let source = "# 预览标题\n" + String(repeating: "正文 **粗体**\n",count: 60)
-        coordinator.render(source,in: view)
-        XCTAssertTrue(preview.string.hasPrefix("预览标题\n")); XCTAssertFalse(preview.string.contains("**"))
-        view.contentView.scroll(to: NSPoint(x: 0,y: 150)); let offset = view.contentView.bounds.origin
-        coordinator.render(source,in: view); XCTAssertEqual(view.contentView.bounds.origin,offset)
-        coordinator.render(source + "\n最新中文🙂",in: view)
-        XCTAssertTrue(preview.string.contains("最新中文🙂")); XCTAssertEqual(view.contentView.bounds.origin,offset)
-        XCTAssertFalse(preview.isEditable)
+        view.navigationDelegate = coordinator
+        let source = "# 预览标题\n\n" + String(repeating: "正文 **粗体**\n\n",count: 60)
+        coordinator.update(source,root: nil,dark: false,in: view)
+        view.loadHTMLString(MarkdownPreviewView.page,baseURL: nil)
+        for _ in 0..<100 { if coordinator.ready { break }; try await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertTrue(coordinator.ready)
+        let text = try await view.evaluateJavaScript("document.getElementById('document').innerText") as? String
+        XCTAssertTrue(text?.hasPrefix("预览标题") == true); XCTAssertFalse(text?.contains("**") == true)
+        _ = try await view.evaluateJavaScript("window.scrollTo(0,150)")
+        let offset = try await view.evaluateJavaScript("window.scrollY") as? Double
+        coordinator.update(source,root: nil,dark: false,in: view)
+        let unchanged = try await view.evaluateJavaScript("window.scrollY") as? Double
+        XCTAssertEqual(unchanged,offset)
+        coordinator.update(source + "\n最新中文🙂",root: nil,dark: true,in: view)
+        let updated = try await view.evaluateJavaScript("document.getElementById('document').innerText") as? String
+        XCTAssertTrue(updated?.contains("最新中文🙂") == true)
+        let after = try await view.evaluateJavaScript("window.scrollY") as? Double
+        XCTAssertEqual(after,offset)
+        let editable = try await view.evaluateJavaScript("document.getElementById('document').isContentEditable") as? Bool
+        XCTAssertEqual(editable,false)
+        let theme = try await view.evaluateJavaScript("document.documentElement.dataset.dark") as? String
+        XCTAssertEqual(theme,"true")
     }
 
     @MainActor func testChineseCompositionDoesNotSaveUnconfirmedCandidates() {
@@ -800,4 +813,73 @@ private final class DocumentUndoTextView: DocumentTextView {
 private final class MarkdownUndoTextView: NSTextView {
     let localUndo = UndoManager()
     override var undoManager: UndoManager? { localUndo }
+}
+
+extension OwnListTests {
+    @MainActor func testMarkdownPreviewCommonMarkIdentifiersAndLayout() {
+        let source = "## 标签\n\nnginx_upstream_check_module __name__ _total **粗体** _斜体_\n\n- 项目一\n  - 嵌套项\n\n| 字段 | 值 |\n| --- | --- |\n| 名称 | 中文😀 |\n"
+        let html = MarkdownRenderer.shared.render(source).html
+        XCTAssertTrue(html.contains("nginx_upstream_check_module __name__ _total"))
+        XCTAssertTrue(html.contains("<strong>粗体</strong>"))
+        XCTAssertTrue(html.contains("<em>斜体</em>"))
+        XCTAssertTrue(html.contains("<table>")); XCTAssertTrue(html.contains("<h2>标签</h2>"))
+        XCTAssertEqual(html.components(separatedBy: "<ul>").count - 1,2)
+        let native = MarkdownDocument.parse("nginx_upstream_check_module __name__ _total **粗体** _斜体_").content
+        XCTAssertEqual(native.string,"nginx_upstream_check_module __name__ _total 粗体 斜体")
+    }
+    @MainActor func testMarkdownCodeLanguagesHighlightAndPreserveContent() {
+        XCTAssertEqual(MarkdownRenderer.shared.languages.count,192)
+        let fixtures: [(String,String)] = [
+            ("swift","let value = \"中文😀\"\nprint(value)\n"),
+            ("python","def hello():\n    return \"中文😀\"\n"),
+            ("js","const value = \"中文\";\nconsole.log(value);\n"),
+            ("typescript","const value: string = \"中文\";\n"),
+            ("bash","# comment\necho \"$HOME\"\n"),
+            ("json","{\"name\": \"中文\", \"count\": 2}\n"),
+            ("yaml","name: 中文\nenabled: true\n"),
+            ("sql","SELECT name FROM users WHERE id = 2;\n"),
+            ("html","<div class=\"test\">中文</div>\n"),
+            ("css",".test { color: red; }\n"),
+            ("go","package main\nfunc main() { println(\"中文\") }\n"),
+            ("rust","fn main() { let value = 2; }\n"),
+            ("java","public class Test { int value = 2; }\n"),
+            ("cpp","int main() { return 2; }\n"),
+            ("csharp","public class Test { string value = \"中文\"; }\n"),
+            ("nginx","server { listen 80; server_name example.test; }\n"),
+            ("dockerfile","FROM alpine:3.20\nRUN echo hello\n")
+        ]
+        for (language,code) in fixtures {
+            let rendered = MarkdownRenderer.shared.render("```"+language+"\n"+code+"```\n")
+            XCTAssertEqual(rendered.codes,[code],language)
+            XCTAssertTrue(rendered.html.contains("class=\"hljs-"),language)
+            XCTAssertTrue(rendered.html.contains("zilo-copy:0"),language)
+        }
+        let unknown = MarkdownRenderer.shared.render("```unknown-language\n<unsafe> & __name__\n```\n")
+        XCTAssertEqual(unknown.codes,["<unsafe> & __name__\n"])
+        XCTAssertTrue(unknown.html.contains("&lt;unsafe&gt; &amp; __name__"))
+        XCTAssertFalse(unknown.html.contains("<unsafe>"))
+    }
+    @MainActor func testMarkdownPreviewEscapesHTMLAndKeepsFenceBoundaries() {
+        let source = "<script>alert('unsafe')</script>\n\n![图](Attachments/Images/test.png)\n\n![远程](https://example.test/a.png)\n\n```bash\necho 中文\n### 原样保留的代码\n"
+        let result = MarkdownRenderer.shared.render(source)
+        XCTAssertFalse(result.html.contains("<script>"))
+        XCTAssertTrue(result.html.contains("&lt;script&gt;"))
+        XCTAssertTrue(result.html.contains("zilo-image://local/Attachments/Images/test.png"))
+        XCTAssertFalse(result.html.contains("src=\"https://"))
+        XCTAssertEqual(result.codes,["echo 中文\n### 原样保留的代码\n"])
+        XCTAssertFalse(result.html.contains("<h3>"),"未闭合的代码围栏后续内容仍属于代码，不能擅自修改源文档")
+        let malicious = MarkdownRenderer.shared.render("[unsafe](javascript:alert(1))\n\n![unsafe](file:///etc/passwd)").html
+        XCTAssertFalse(malicious.contains("href=\"javascript:")); XCTAssertFalse(malicious.contains("src=\"file:"))
+    }
+    @MainActor func testPreviewImageAccessRestrictedToAttachments() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("Attachments/Images"),withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertEqual(MarkdownRenderer.imageURL(URL(string:"zilo-image://local/Attachments/Images/test.png")!,root:root),root.appendingPathComponent("Attachments/Images/test.png"))
+        XCTAssertNil(MarkdownRenderer.imageURL(URL(string:"zilo-image://local/Attachments/../../private.txt")!,root:root))
+        XCTAssertNil(MarkdownRenderer.imageURL(URL(string:"zilo-image://other/Attachments/test.png")!,root:root))
+        let escaped = root.appendingPathComponent("Attachments/Images/escaped")
+        try FileManager.default.createSymbolicLink(at:escaped,withDestinationURL:root.deletingLastPathComponent())
+        XCTAssertNil(MarkdownRenderer.imageURL(URL(string:"zilo-image://local/Attachments/Images/escaped/private.txt")!,root:root))
+    }
 }
