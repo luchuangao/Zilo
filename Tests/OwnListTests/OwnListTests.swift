@@ -699,7 +699,7 @@ final class OwnListTests: XCTestCase {
         XCTAssertTrue(short.string.contains("中文🙂正文")); XCTAssertTrue(short.string.contains("☑ 检查项")); XCTAssertTrue(short.string.contains("子任务验收"))
         XCTAssertGreaterThan(short.frame.height,24); XCTAssertLessThan(short.frame.height,300)
         let color = try XCTUnwrap(short.textStorage?.attribute(.foregroundColor,at: 0,effectiveRange: nil) as? NSColor)
-        XCTAssertEqual(color,NSColor.black)
+        XCTAssertEqual(color,DocumentStyle.text)
         task.notes = Array(repeating: "长正文打印验收",count: 100).joined(separator: "\n")
         XCTAssertGreaterThan(TaskPrintDocument.makeView(task: task).frame.height,1000)
     }

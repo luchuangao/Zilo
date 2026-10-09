@@ -12,29 +12,42 @@ extension NSTextView {
     }
 }
 
+/// Draw semantic decorations in both the editable document and NSPrintOperation.
+/// Text, selection, IME and undo are untouched by this display-only pass.
+class StyledDocumentTextView: NSTextView {
+    override func draw(_ rect: NSRect) {
+        super.draw(rect)
+        guard let storage = textStorage,let layout = layoutManager,let container = textContainer else { return }
+        let source = storage.string as NSString; var location = 0
+        while location < source.length {
+            let paragraph = source.paragraphRange(for:NSRange(location:location,length:0))
+            let meta = DocumentStyle.metadata(storage.attributes(at:location,effectiveRange:nil))
+            let glyphs = layout.glyphRange(forCharacterRange:paragraph,actualCharacterRange:nil)
+            let bounds = layout.boundingRect(forGlyphRange:glyphs,in:container).offsetBy(dx:textContainerOrigin.x,dy:textContainerOrigin.y)
+            if bounds.intersects(rect) {
+                if meta["kind"] == "heading",meta["title"] != "1",Int(meta["level"] ?? "9") ?? 9 <= 2 {
+                    DocumentStyle.border.setFill(); NSRect(x:textContainerOrigin.x,y:bounds.maxY+4,width:container.size.width,height:0.5).fill()
+                }
+                if meta["quote"] != nil { DocumentStyle.accent.setFill(); NSRect(x:textContainerOrigin.x+4,y:bounds.minY,width:3,height:bounds.height).fill() }
+            }
+            location = NSMaxRange(paragraph)
+        }
+    }
+}
+
 enum TaskPrintDocument {
     static func makeView(task: TaskItem,children: [TaskItem] = [],baseURL: URL? = nil) -> NSTextView {
-        let content = NSMutableAttributedString(string: task.title + "\n\n",attributes: [.font: NSFont.boldSystemFont(ofSize: 22)])
-        if let rich = task.richText, let attributed = RichDocument.decode(rich) { content.append(attributed) }
-        else if task.editingMode == .markdown { content.append(MarkdownDocument.parse(task.notes,baseURL: baseURL).content) }
-        else { content.append(NSAttributedString(string: task.notes,attributes: [.font: NSFont.systemFont(ofSize: 14)])) }
-        for check in task.checks { content.append(NSAttributedString(string: "\n\(check.done ? "☑" : "☐") \(check.title)",attributes: [.font: NSFont.systemFont(ofSize: 14)])) }
-        if !children.isEmpty { content.append(NSAttributedString(string: "\n\n子任务",attributes: [.font: NSFont.boldSystemFont(ofSize: 14)])) }
-        for child in children { content.append(NSAttributedString(string: "\n\(child.completed ? "☑" : "☐") \(child.title)",attributes: [.font: NSFont.systemFont(ofSize: 14)])) }
-        let range = NSRange(location: 0,length: content.length)
-        content.addAttribute(.foregroundColor,value: NSColor.black,range: range)
-        content.removeAttribute(.backgroundColor,range: range)
-        content.enumerateAttributes(in: range) { attributes,run,_ in
-            if MarkdownTyping.isCodeBlock(attributes) { content.addAttribute(.backgroundColor,value: NSColor(white: 0.95,alpha: 1),range: run) }
-        }
-        RichDocument.fitImages(content,width: 523)
-        let view = NSTextView(frame: NSRect(x: 0,y: 0,width: 540,height: 24))
+        let content = NSMutableAttributedString(attributedString:DocumentExport.content(task:task,children:children,baseURL:baseURL))
+        // Export uses the same colors as the light preview; never flatten code
+        // highlighting, inline-code shading or table/header formatting to black.
+        RichDocument.fitImages(content,width: 521)
+        let view = StyledDocumentTextView(frame: NSRect(x: 0,y: 0,width: 523,height: 24))
         view.textContainerInset = .zero; view.textContainer?.lineFragmentPadding = 0
-        view.textContainer?.containerSize = NSSize(width: 540,height: CGFloat.greatestFiniteMagnitude)
+        view.textContainer?.containerSize = NSSize(width: 523,height: CGFloat.greatestFiniteMagnitude)
         view.textStorage?.setAttributedString(content)
         if let container = view.textContainer, let layout = view.layoutManager {
             layout.ensureLayout(for: container)
-            view.setFrameSize(NSSize(width: 540,height: max(24,ceil(layout.usedRect(for: container).height))))
+            view.setFrameSize(NSSize(width: 523,height: max(24,ceil(layout.usedRect(for: container).height))))
         }
         return view
     }
@@ -297,7 +310,7 @@ struct DetailDocumentEditor: NSViewRepresentable {
             if parent.rich, editor.selectedRange().length == 0,
                let storage = editor.textStorage, editor.selectedRange().location < storage.length {
                 let attributes = storage.attributes(at: editor.selectedRange().location,effectiveRange: nil)
-                if MarkdownTyping.isCodeBlock(attributes) { editor.typingAttributes = MarkdownTyping.codeBlockAttributes }
+                if MarkdownTyping.isCodeBlock(attributes) { editor.typingAttributes = attributes }
                 else if MarkdownTyping.isCodeBlock(editor.typingAttributes) { editor.typingAttributes = attributes }
             }
             // Recognize syntax on a committed edit, never on cursor movement.
@@ -348,7 +361,7 @@ struct DetailDocumentEditor: NSViewRepresentable {
 }
 /// Code blocks use ordinary RTF paragraph attributes, so their boundaries survive
 /// app restarts, backups and sync. Paint the panel separately for light/dark mode.
-class DocumentTextView: NSTextView {
+class DocumentTextView: StyledDocumentTextView {
     var compositionDidEnd: ((DocumentTextView) -> Void)?
     override func insertText(_ insertString: Any,replacementRange: NSRange) {
         let wasComposing = hasMarkedText()

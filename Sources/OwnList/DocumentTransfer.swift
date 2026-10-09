@@ -2,13 +2,31 @@ import AppKit
 import UniformTypeIdentifiers
 
 enum RichDocument {
+    private static let signature = Data("ZILORICH1\n".utf8)
+    private struct SemanticRun: Codable { var location: Int; var length: Int; var block: [String:String] }
+    private struct Envelope: Codable { var rtf: Data; var runs: [SemanticRun] }
     static func decode(_ data: Data) -> NSAttributedString? {
-        // Autodetect preserves both old RTF documents and flattened RTFD images.
-        try? NSAttributedString(data: data, options: [:], documentAttributes: nil)
+        // Legacy RTF/RTFD remain readable. The envelope keeps language/table/list
+        // metadata that RTF itself cannot represent, without changing attachments.
+        guard data.starts(with: signature) else { return try? NSAttributedString(data:data,options:[:],documentAttributes:nil) }
+        guard let envelope = try? JSONDecoder().decode(Envelope.self,from:data.dropFirst(signature.count)),
+              let text = try? NSMutableAttributedString(data:envelope.rtf,options:[:],documentAttributes:nil) else { return nil }
+        for run in envelope.runs where run.location >= 0 && run.length > 0 && run.location <= text.length && run.length <= text.length-run.location {
+            text.addAttribute(.ziloBlock,value:run.block,range:NSRange(location:run.location,length:run.length))
+        }
+        return text
     }
     static func encode(_ text: NSAttributedString) -> Data? {
         let type: NSAttributedString.DocumentType = hasImages(text) ? .rtfd : .rtf
-        return try? text.data(from: NSRange(location: 0, length: text.length), documentAttributes: [.documentType: type])
+        guard let rtf = try? text.data(from:NSRange(location:0,length:text.length),documentAttributes:[.documentType:type]) else { return nil }
+        var runs: [SemanticRun] = []
+        text.enumerateAttribute(.ziloBlock,in:NSRange(location:0,length:text.length)) { value,range,_ in
+            if let block = value as? [String:String] { runs.append(SemanticRun(location:range.location,length:range.length,block:block)) }
+        }
+        guard !runs.isEmpty else { return rtf }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard let json = try? encoder.encode(Envelope(rtf:rtf,runs:runs)) else { return nil }
+        return signature + json
     }
     static func hasImages(_ text: NSAttributedString) -> Bool {
         var found = false
@@ -79,67 +97,7 @@ enum MarkdownDocument {
         return result
     }
     static func parse(_ source: String, baseURL: URL? = nil) -> ImportResult {
-        let result = NSMutableAttributedString(string: ""); var warnings: [String] = []
-        var fence: String?
-        let lines = source.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n").components(separatedBy: "\n")
-        for (index, line) in lines.enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if let current = fence {
-                if trimmed.hasPrefix(current), trimmed.dropFirst(current.count).trimmingCharacters(in: .whitespaces).isEmpty { fence = nil; continue }
-                result.append(NSAttributedString(string: line + "\n", attributes: MarkdownTyping.codeBlockAttributes)); continue
-            }
-            if trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~") { fence = String(trimmed.prefix { $0 == trimmed.first }); continue }
-            var attributes = MarkdownTyping.bodyAttributes; var body = line
-            if let match = match(#"^(#{1,6})[ \t]+(.*)$"#, line) {
-                let level = (line as NSString).substring(with: match.range(at: 1)).count
-                attributes[.font] = NSFont.boldSystemFont(ofSize: [24.0,20,18,17,16,15][level - 1])
-                body = (line as NSString).substring(with: match.range(at: 2))
-            } else if let match = match(#"^\s*[-*+][ \t]+(.*)$"#, line) {
-                attributes = MarkdownTyping.listAttributes(); body = "• " + (line as NSString).substring(with: match.range(at: 1))
-            } else if match(#"^\s*\d+[.)][ \t]+"#, line) != nil { attributes = MarkdownTyping.listAttributes() }
-            else if let match = match(#"^>[ \t]?(.*)$"#, line) {
-                attributes = MarkdownTyping.listAttributes(); body = "│ " + (line as NSString).substring(with: match.range(at: 1))
-            }
-            let paragraph = inline(body, attributes: attributes, baseURL: baseURL, warnings: &warnings)
-            result.append(paragraph)
-            if index < lines.count - 1 { result.append(NSAttributedString(string: "\n", attributes: attributes)) }
-        }
-        if fence != nil { warnings.append("代码围栏未闭合，已保留其中的代码。") }
-        return ImportResult(content: result, warnings: warnings)
-    }
-    private static func inline(_ text: String, attributes: [NSAttributedString.Key: Any], baseURL: URL?, warnings: inout [String]) -> NSAttributedString {
-        let output = NSMutableAttributedString(string: "")
-        let pattern = #"(?<!\\)(?:!\[([^\]]*)\]\((<[^>]+>|[^)]+)\)|\[([^\]]+)\]\(([^)]+)\)|(`+)(.+?)\5|\*\*(.+?)\*\*|(?<![\p{L}\p{N}_])__(?!(?:name|init|main|file|all|version|doc|dict|class|repr|str)__)(.+?)__(?![\p{L}\p{N}_])|~~(.+?)~~|\*([^*]+)\*|(?<![\p{L}\p{N}_])_([^_]+)_(?![\p{L}\p{N}_]))"#
-        let regex = try! NSRegularExpression(pattern: pattern)
-        let source = text as NSString; var offset = 0
-        for match in regex.matches(in: text, range: NSRange(location: 0, length: source.length)) {
-            output.append(NSAttributedString(string: unescape(source.substring(with: NSRange(location: offset, length: match.range.location - offset))), attributes: attributes))
-            func value(_ group: Int) -> String? { let r = match.range(at: group); return r.location == NSNotFound ? nil : source.substring(with: r) }
-            var run = attributes
-            if let path = value(2) {
-                let address = path.trimmingCharacters(in: CharacterSet(charactersIn: "<>"))
-                let decoded = address.removingPercentEncoding ?? address
-                let url: URL? = decoded.hasPrefix("file:") ? URL(string: decoded) : decoded.hasPrefix("/") ? URL(fileURLWithPath: decoded) : baseURL?.appendingPathComponent(decoded)
-                if let url, !decoded.contains("://") || url.isFileURL, let data = try? Data(contentsOf: url), let image = try? RichDocument.image(data, name: url.lastPathComponent) { output.append(image) }
-                else if decoded.hasPrefix("data:image/"), let comma = decoded.firstIndex(of: ","), let data = Data(base64Encoded: String(decoded[decoded.index(after: comma)...])), let image = try? RichDocument.image(data) { output.append(image) }
-                else { output.append(NSAttributedString(string: "[图片：\(value(1) ?? address)]", attributes: attributes)); warnings.append("图片未载入：\(address)。可通过“插入图片”补充。") }
-            } else if let title = value(3), let address = value(4), let url = URL(string: address) {
-                run[.link] = url; output.append(inline(title, attributes: run, baseURL: baseURL, warnings: &warnings))
-            } else if let code = value(6) {
-                run[.font] = NSFont.monospacedSystemFont(ofSize: (run[.font] as? NSFont)?.pointSize ?? 14, weight: .regular)
-                output.append(NSAttributedString(string: code, attributes: run))
-            } else {
-                let font = run[.font] as? NSFont ?? .systemFont(ofSize: 14)
-                let content = value(7) ?? value(8) ?? value(9) ?? value(10) ?? value(11) ?? ""
-                if value(7) != nil || value(8) != nil { run[.font] = NSFontManager.shared.convert(font, toHaveTrait: .boldFontMask) }
-                else if value(9) != nil { run[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
-                else { run[.font] = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
-                output.append(inline(content, attributes: run, baseURL: baseURL, warnings: &warnings))
-            }
-            offset = NSMaxRange(match.range)
-        }
-        output.append(NSAttributedString(string: unescape(source.substring(from: offset)), attributes: attributes))
-        return output
+        MarkdownNativeDocument.parse(source,baseURL: baseURL)
     }
     /// Replace actual image destinations only, preserving source syntax and code examples.
     static func rewriteImages(_ source: String,_ transform: (String) throws -> String) rethrows -> String {
@@ -175,55 +133,9 @@ enum MarkdownDocument {
         let url = decoded.hasPrefix("file:") ? URL(string: decoded) : decoded.hasPrefix("/") ? URL(fileURLWithPath: decoded) : baseURL?.appendingPathComponent(decoded)
         return url.flatMap { try? Data(contentsOf: $0) }
     }
-    private static func unescape(_ text: String) -> String {
-        text.replacingOccurrences(of: #"\\([\\`*_{}\[\]()#+.!>~-])"#, with: "$1", options: .regularExpression)
-    }
-    private static func match(_ pattern: String, _ text: String) -> NSTextCheckingResult? {
-        (try? NSRegularExpression(pattern: pattern))?.firstMatch(in: text, range: NSRange(location: 0, length: text.utf16.count))
-    }
     struct ExportResult { let text: String; let images: [(String, Data)] }
     static func export(_ content: NSAttributedString, assets: String, inlineImages: Bool = false) -> ExportResult {
-        let maxTicks = content.string.components(separatedBy: "\n").map { $0.prefix { $0 == "`" }.count }.max() ?? 0
-        let codeFence = String(repeating: "`", count: max(3, maxTicks + 1))
-        let source = content.string as NSString; var result = ""; var images: [(String, Data)] = []; var location = 0; var inCode = false
-        while location < source.length {
-            let range = source.lineRange(for: NSRange(location: location, length: 0))
-            let paragraph = content.attributedSubstring(from: range)
-            let isCode = MarkdownTyping.isCodeBlock(content.attributes(at: location, effectiveRange: nil))
-            if isCode != inCode { result += codeFence + "\n"; inCode = isCode }
-            if isCode { result += paragraph.string; location = NSMaxRange(range); continue }
-            let font = paragraph.attribute(.font, at: 0, effectiveRange: nil) as? NSFont
-            let heading = font.map { NSFontManager.shared.traits(of: $0).contains(.boldFontMask) && $0.pointSize >= 15 } ?? false
-            if heading && !paragraph.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { let sizes: [CGFloat] = [24,20,18,17,16,15]; let level = sizes.firstIndex(where: { (font?.pointSize ?? 0) >= $0 }) ?? 5; result += String(repeating: "#", count: level + 1) + " " }
-            var line = ""
-            paragraph.enumerateAttributes(in: NSRange(location: 0, length: paragraph.length)) { attrs, run, _ in
-                if let attachment = attrs[.attachment] as? NSTextAttachment, let data = RichDocument.imageData(attachment) {
-                    if inlineImages { line += "![图片](data:image/png;base64,\(data.base64EncodedString()))" }
-                    else { let name = "image-\(images.count + 1).png"; images.append((name, data)); line += "![图片](<\(assets)/\(name)>)" }
-                    return
-                }
-                var text = (paragraph.string as NSString).substring(with: run)
-                let newline = text.hasSuffix("\n"); if newline { text.removeLast() }
-                if !text.isEmpty {
-                    let font = attrs[.font] as? NSFont ?? .systemFont(ofSize: 14); let traits = NSFontManager.shared.traits(of: font)
-                    if traits.contains(.fixedPitchFontMask) { let ticks = String(repeating: "`", count: max(1, (text.components(separatedBy: "`").count))); text = ticks + " " + text + " " + ticks }
-                    else {
-                        text = text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "*", with: "\\*").replacingOccurrences(of: "_", with: "\\_").replacingOccurrences(of: "[", with: "\\[")
-                        if !heading && traits.contains(.boldFontMask) { text = "**" + text + "**" }
-                        if traits.contains(.italicFontMask) { text = "*" + text + "*" }
-                        if (attrs[.strikethroughStyle] as? Int ?? 0) != 0 { text = "~~" + text + "~~" }
-                        if (attrs[.underlineStyle] as? Int ?? 0) != 0 { text = "<u>" + text + "</u>" }
-                    }
-                    if let url = attrs[.link] { text = "[\(text)](\(url))" }
-                }
-                line += text + (newline ? "\n" : "")
-            }
-            if line.hasPrefix("• ") { line = "- " + line.dropFirst(2) }
-            if line.hasPrefix("│ ") { line = "> " + line.dropFirst(2) }
-            result += line; location = NSMaxRange(range)
-        }
-        if inCode { if !result.hasSuffix("\n") { result += "\n" }; result += codeFence + "\n" }
-        return ExportResult(text: result, images: images)
+        MarkdownNativeDocument.export(content,assets: assets,inlineImages: inlineImages)
     }
 }
 
@@ -254,8 +166,12 @@ enum TaskDocument {
 enum DocumentExport {
     enum Format: String { case word = "docx", pdf = "pdf", markdown = "md" }
     static func content(task: TaskItem, children: [TaskItem],baseURL: URL? = nil) -> NSAttributedString {
-        let output = NSMutableAttributedString(string: task.title + "\n\n", attributes: [.font: NSFont.boldSystemFont(ofSize: 24), .foregroundColor: NSColor.black])
-        output.append(task.richText.flatMap(RichDocument.decode) ?? MarkdownDocument.parse(task.notes,baseURL: baseURL).content)
+        var title = DocumentStyle.body; title[.font] = NSFont.boldSystemFont(ofSize:24)
+        title[.ziloBlock] = ["kind":"heading","level":"1","title":"1"]
+        let output = NSMutableAttributedString(string:task.title+"\n",attributes:title)
+        if let rich = task.richText.flatMap(RichDocument.decode) { output.append(rich) }
+        else if task.editingMode == .markdown { output.append(MarkdownDocument.parse(task.notes,baseURL:baseURL).content) }
+        else { output.append(NSAttributedString(string:task.notes,attributes:DocumentStyle.body)) }
         for item in task.checks { output.append(NSAttributedString(string: "\n\(item.done ? "☑" : "☐") \(item.title)", attributes: MarkdownTyping.bodyAttributes)) }
         if !children.isEmpty { output.append(NSAttributedString(string: "\n\n子任务\n", attributes: [.font: NSFont.boldSystemFont(ofSize: 18)])) }
         for child in children { output.append(NSAttributedString(string: "\(child.completed ? "☑" : "☐") \(child.title)\n", attributes: MarkdownTyping.bodyAttributes)) }
@@ -314,39 +230,77 @@ enum WordDocument {
     static func data(_ content: NSAttributedString) -> Data {
         var entries: [(String, Data)] = []; var relationships = ""; var body = ""; var imageID = 0; var linkID = 0
         let source = content.string as NSString; var location = 0
-        while location < source.length {
-            let range = source.lineRange(for: NSRange(location: location, length: 0))
-            let attrs = content.attributes(at: location, effectiveRange: nil)
-            let code = MarkdownTyping.isCodeBlock(attrs)
-            let font = attrs[.font] as? NSFont ?? .systemFont(ofSize: 14)
-            let heading = NSFontManager.shared.traits(of: font).contains(.boldFontMask) && font.pointSize >= 15
-            let style = location == 0 ? "Title" : heading ? "Heading\(([CGFloat(24),20,18,17,16,15].firstIndex(where: { font.pointSize >= $0 }) ?? 5) + 1)" : "Normal"
-            body += "<w:p><w:pPr><w:pStyle w:val=\"\(style)\"/><w:spacing w:after=\"120\"/>"
-            if code { body += "<w:shd w:val=\"clear\" w:fill=\"F3F4F6\"/><w:ind w:left=\"180\"/>" }
-            body += "</w:pPr>"
-            content.enumerateAttributes(in: range) { attrs, run, _ in
-                if let attachment = attrs[.attachment] as? NSTextAttachment, let data = RichDocument.imageData(attachment), let image = NSImage(data: data) {
+        func color(_ value: Any?,fallback: String = "242730") -> String {
+            guard let c = (value as? NSColor)?.usingColorSpace(.sRGB) else { return fallback }
+            return String(format:"%02X%02X%02X",Int((c.redComponent*255).rounded()),Int((c.greenComponent*255).rounded()),Int((c.blueComponent*255).rounded()))
+        }
+        func paragraph(_ range: NSRange,inTable: Bool = false) -> String {
+            let attrs = content.attributes(at:range.location,effectiveRange:nil); let meta = DocumentStyle.metadata(attrs)
+            let code = MarkdownTyping.isCodeBlock(attrs) || meta["kind"] == "code"
+            let font = attrs[.font] as? NSFont ?? .systemFont(ofSize:14)
+            let heading = !inTable && (meta["kind"] == "heading" || NSFontManager.shared.traits(of:font).contains(.boldFontMask) && font.pointSize >= 15)
+            let style = range.location == 0 ? "Title" : heading ? "Heading\(meta["level"] ?? "2")" : "Normal"
+            let p = attrs[.paragraphStyle] as? NSParagraphStyle ?? .default
+            let hasImage = RichDocument.hasImages(content.attributedSubstring(from:range))
+            let line = hasImage ? "w:line=\"320\" w:lineRule=\"auto\"" : "w:line=\"\(Int(ceil(NSLayoutManager().defaultLineHeight(for:font)+p.lineSpacing)*20))\" w:lineRule=\"exact\""
+            var value = "<w:p><w:pPr><w:pStyle w:val=\"\(style)\"/><w:spacing w:before=\"\(Int(p.paragraphSpacingBefore*20))\" w:after=\"\(Int(p.paragraphSpacing*20))\" \(line)/>"
+            if heading || meta["kind"] == "codeLabel" { value += "<w:keepNext/>" }
+            let first = Int(p.firstLineHeadIndent*20), left = Int(p.headIndent*20)
+            if !inTable && (left != 0 || first != 0) { value += "<w:ind w:left=\"\(left)\"" + (first < left ? " w:hanging=\"\(left-first)\"" : " w:firstLine=\"\(first-left)\"") + "/>" }
+            if p.alignment == .center { value += "<w:jc w:val=\"center\"/>" }; if p.alignment == .right { value += "<w:jc w:val=\"right\"/>" }
+            if code || meta["kind"] == "codeLabel" { value += "<w:shd w:val=\"clear\" w:fill=\"F5F6F8\"/>" }
+            if meta["quote"] != nil { value += "<w:pBdr><w:left w:val=\"single\" w:sz=\"18\" w:color=\"526AE8\" w:space=\"10\"/></w:pBdr>" }
+            if heading && range.location > 0 { value += "<w:pBdr><w:bottom w:val=\"single\" w:sz=\"4\" w:color=\"E6E8EE\" w:space=\"6\"/></w:pBdr>" }
+            value += "</w:pPr>"
+            content.enumerateAttributes(in:range) { attrs,run,_ in
+                if let attachment = attrs[.attachment] as? NSTextAttachment, let data = RichDocument.imageData(attachment), let image = NSImage(data:data) {
                     imageID += 1; let name = "image\(imageID).png"; let id = "image\(imageID)"
-                    entries.append(("word/media/" + name, data))
+                    entries.append(("word/media/"+name,data))
                     relationships += "<Relationship Id=\"\(id)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/\(name)\"/>"
-                    let scale = min(1, 523 / max(1, image.size.width), 700 / max(1, image.size.height))
-                    let cx = Int(image.size.width * scale * 12700), cy = Int(image.size.height * scale * 12700)
-                    body += "<w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\"><wp:extent cx=\"\(cx)\" cy=\"\(cy)\"/><wp:docPr id=\"\(imageID)\" name=\"图片\(imageID)\"/><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:pic><pic:nvPicPr><pic:cNvPr id=\"\(imageID)\" name=\"\(name)\"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed=\"\(id)\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"\(cx)\" cy=\"\(cy)\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"; return
+                    let scale = min(1,523/max(1,image.size.width),700/max(1,image.size.height)); let cx = Int(image.size.width*scale*12700), cy = Int(image.size.height*scale*12700)
+                    value += "<w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\"><wp:extent cx=\"\(cx)\" cy=\"\(cy)\"/><wp:docPr id=\"\(imageID)\" name=\"图片\(imageID)\"/><a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"><pic:pic><pic:nvPicPr><pic:cNvPr id=\"\(imageID)\" name=\"\(name)\"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed=\"\(id)\"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"\(cx)\" cy=\"\(cy)\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"; return
                 }
-                let f = attrs[.font] as? NSFont ?? .systemFont(ofSize: 14); let traits = NSFontManager.shared.traits(of: f)
+                let f = attrs[.font] as? NSFont ?? .systemFont(ofSize:14); let traits = NSFontManager.shared.traits(of:f)
                 let family = traits.contains(.fixedPitchFontMask) ? "Menlo" : "Arial"
-                var properties = "<w:rFonts w:ascii=\"\(family)\" w:hAnsi=\"\(family)\" w:eastAsia=\"PingFang SC\"/><w:sz w:val=\"\(Int(f.pointSize * 2))\"/><w:color w:val=\"222222\"/>"
+                var properties = "<w:sz w:val=\"\(Int(f.pointSize*2))\"/><w:color w:val=\"\(color(attrs[.foregroundColor]))\"/>"
                 if traits.contains(.boldFontMask) { properties += "<w:b/>" }; if traits.contains(.italicFontMask) { properties += "<w:i/>" }
-                if (attrs[.underlineStyle] as? Int ?? 0) != 0 { properties += "<w:u w:val=\"single\"/>" }
-                if (attrs[.strikethroughStyle] as? Int ?? 0) != 0 { properties += "<w:strike/>" }
-                let text = source.substring(with: run).trimmingCharacters(in: .newlines)
-                let runXML = "<w:r><w:rPr>\(properties)</w:rPr>" + text.components(separatedBy: "\t").map { "<w:t xml:space=\"preserve\">\(xml($0))</w:t>" }.joined(separator: "<w:tab/>") + "</w:r>"
+                if (attrs[.underlineStyle] as? Int ?? 0) != 0 { properties += "<w:u w:val=\"single\"/>" }; if (attrs[.strikethroughStyle] as? Int ?? 0) != 0 { properties += "<w:strike/>" }
+                if !code, let fill = attrs[.backgroundColor] as? NSColor { properties += "<w:shd w:val=\"clear\" w:fill=\"\(color(fill,fallback:"F5F6F8"))\"/>" }
+                var text = source.substring(with:run)
+                // Only remove the paragraph terminator, keeping all soft breaks.
+                if NSMaxRange(run) == NSMaxRange(range), text.hasSuffix("\n") { text.removeLast() }
+                var chunks: [(String,Bool)] = []
+                for character in text { let emoji = character.unicodeScalars.contains { $0.properties.isEmojiPresentation || $0.value == 0xFE0F }; if chunks.last?.1 == emoji { chunks[chunks.count-1].0.append(character) } else { chunks.append((String(character),emoji)) } }
+                var runXML = ""
+                for (chunk,emoji) in chunks {
+                    let face = emoji ? "Apple Color Emoji" : family
+                    var nodes = ""
+                    for (i,line) in chunk.components(separatedBy:"\u{2028}").enumerated() {
+                        if i > 0 { nodes += "<w:br/>" }
+                        nodes += line.components(separatedBy:"\t").map { "<w:t xml:space=\"preserve\">\(xml($0))</w:t>" }.joined(separator:"<w:tab/>")
+                    }
+                    runXML += "<w:r><w:rPr><w:rFonts w:ascii=\"\(face)\" w:hAnsi=\"\(face)\" w:eastAsia=\"\(emoji ? face : "PingFang SC")\"/>\(properties)</w:rPr>\(nodes)</w:r>"
+                }
                 if let url = attrs[.link] {
-                    linkID += 1; let id = "link\(linkID)"; relationships += "<Relationship Id=\"\(id)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"\(xml(String(describing: url)))\" TargetMode=\"External\"/>"
-                    body += "<w:hyperlink r:id=\"\(id)\">\(runXML)</w:hyperlink>"
-                } else { body += runXML }
+                    linkID += 1; let id = "link\(linkID)"; relationships += "<Relationship Id=\"\(id)\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink\" Target=\"\(xml(String(describing:url)))\" TargetMode=\"External\"/>"; value += "<w:hyperlink r:id=\"\(id)\">\(runXML)</w:hyperlink>"
+                } else { value += runXML }
             }
-            body += "</w:p>"; location = NSMaxRange(range)
+            return value+"</w:p>"
+        }
+        while location < source.length {
+            let range = source.paragraphRange(for:NSRange(location:location,length:0)); let meta = DocumentStyle.metadata(content.attributes(at:location,effectiveRange:nil))
+            if meta["kind"] != "table" { body += paragraph(range); location = NSMaxRange(range); continue }
+            let id = meta["table"] ?? ""; let columns = max(1,Int(meta["columns"] ?? "1") ?? 1); let width = 10466/columns
+            body += "<w:tbl><w:tblPr><w:tblW w:w=\"10466\" w:type=\"dxa\"/><w:tblLayout w:type=\"fixed\"/><w:tblBorders>" + ["top","left","bottom","right","insideH","insideV"].map { "<w:\($0) w:val=\"single\" w:sz=\"4\" w:color=\"E6E8EE\"/>" }.joined() + "</w:tblBorders><w:tblCellMar>" + ["top","left","bottom","right"].map { "<w:\($0) w:w=\"160\" w:type=\"dxa\"/>" }.joined() + "</w:tblCellMar></w:tblPr><w:tblGrid>" + String(repeating:"<w:gridCol w:w=\"\(width)\"/>",count:columns) + "</w:tblGrid>"
+            var row: String?
+            while location < source.length {
+                let r = source.paragraphRange(for:NSRange(location:location,length:0)); let m = DocumentStyle.metadata(content.attributes(at:location,effectiveRange:nil))
+                guard m["kind"] == "table",m["table"] == id else { break }
+                if m["row"] != row { if row != nil { body += "</w:tr>" }; body += "<w:tr>"; if m["header"] == "1" { body += "<w:trPr><w:tblHeader/></w:trPr>" }; row = m["row"] }
+                body += "<w:tc><w:tcPr><w:tcW w:w=\"\(width)\" w:type=\"dxa\"/>" + (m["header"] == "1" ? "<w:shd w:fill=\"F5F6F8\"/>":"") + "</w:tcPr>" + paragraph(r,inTable:true) + "</w:tc>"
+                location = NSMaxRange(r)
+            }
+            if row != nil { body += "</w:tr>" }; body += "</w:tbl><w:p/>"
         }
         body += "<w:sectPr><w:pgSz w:w=\"11906\" w:h=\"16838\"/><w:pgMar w:top=\"720\" w:right=\"720\" w:bottom=\"720\" w:left=\"720\"/></w:sectPr>"
         func add(_ path: String, _ xml: String) { entries.append((path, Data(("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>" + xml).utf8))) }

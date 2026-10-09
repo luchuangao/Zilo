@@ -7,6 +7,9 @@ struct TaskDetailView: View {
     @EnvironmentObject var calendar: CalendarService
     @EnvironmentObject var focus: FocusTimer
     @StateObject private var document = DocumentEditorController()
+    @State private var showMindMap = false
+    @State private var mindMapOutline = ""
+    @State private var mindMapRange: NSRange?
     @State private var showDate = false
     @State private var showOrganization = false
     @State private var showFormatting = false
@@ -42,6 +45,7 @@ struct TaskDetailView: View {
                 .buttonStyle(.plain)
                 .sheet(isPresented: $showHistory) { HistoryView(taskID: task.id).environmentObject(store) }
                 .sheet(isPresented: $showLink) { linkEditor }
+                .sheet(isPresented: $showMindMap) { MindMapEditor(outline:$mindMapOutline,replacing:mindMapRange != nil,onSave:saveMindMap) }
             } else {
                 QuietEmptyState(title: "选择一个任务",message: "查看详细内容、安排时间或开始专注",symbol: "square.and.pencil")
             }
@@ -130,6 +134,7 @@ struct TaskDetailView: View {
                     Button("附件",systemImage: "paperclip") { attach(task) }
                     Button("图片",systemImage: "photo") { insertImages() }
                     Button("Markdown 文件",systemImage: "doc.text") { insertMarkdown() }
+                    Button("思维导图",systemImage:"point.3.connected.trianglepath.dotted") { beginMindMap() }
                     Divider()
                     ForEach([DocumentFormat.heading,.bullet,.numbered,.quote,.codeBlock,.link],id: \.self) { format in
                         Button(format.title,systemImage: format.symbol) { applyFormat(format) }
@@ -263,7 +268,40 @@ struct TaskDetailView: View {
         }
         Button { beginEntry("check") } label: { Image(systemName: "checklist").frame(width: 28,height: 28) }.help("添加检查项").accessibilityLabel("添加检查项")
         Button { attach(task) } label: { Image(systemName: "paperclip").frame(width: 28,height: 28) }.help("上传附件").accessibilityLabel("上传附件")
+        Button { beginMindMap() } label: { Image(systemName:"point.3.connected.trianglepath.dotted").frame(width:28,height:28) }.help("插入或编辑思维导图").accessibilityLabel("插入或编辑思维导图")
         Button { insertImages() } label: { Image(systemName: "photo").frame(width: 28,height: 28) }.help("插入图片").accessibilityLabel("插入图片")
+    }
+    func beginMindMap() {
+        mindMapOutline = MindMapDocument.example; mindMapRange = nil
+        guard let editor = document.editor else { showMindMap = true; return }
+        editor.unmarkText(); editor.didChangeText()
+        let selection = editor.selectedRange()
+        if task?.editingMode == .richText,let storage = editor.textStorage,storage.length > 0 {
+            let index = min(selection.location,storage.length-1); var range = NSRange()
+            if let m = storage.attribute(.ziloBlock,at:index,effectiveRange:&range) as? [String:String],m["kind"] == "mindmap",let source = m["source"] {
+                mindMapOutline = source; mindMapRange = range
+            }
+        } else if let re = try? NSRegularExpression(pattern:#"(?ms)^```mermaid[ \t]*\n(mindmap\b.*?)^```[ \t]*(?:\n|$)"#) {
+            for match in re.matches(in:editor.string,range:NSRange(location:0,length:editor.string.utf16.count)) where selection.location >= match.range.location && selection.location <= NSMaxRange(match.range) {
+                mindMapOutline = (editor.string as NSString).substring(with:match.range(at:1)); mindMapRange = match.range; break
+            }
+        }
+        showMindMap = true
+    }
+    func saveMindMap(_ source: String) {
+        guard let editor = document.editor,let task else { return }
+        do {
+            let diagram = try MindMapDocument.parse(source)
+            let range = mindMapRange ?? editor.selectedRange()
+            if task.editingMode == .markdown {
+                let prefix = range.location > 0 && (editor.string as NSString).character(at:range.location-1) != 10 ? "\n\n":""
+                editor.insertText(prefix+"```mermaid\n"+diagram.source+"\n```\n",replacementRange:range)
+            } else {
+                let text = NSMutableAttributedString(attributedString:try MindMapDocument.attachment(diagram.source))
+                text.append(NSAttributedString(string:"\n",attributes:DocumentStyle.body)); editor.insertText(text,replacementRange:range)
+            }
+            editor.didChangeText()
+        } catch { store.error = error.localizedDescription }
     }
     func applyFormat(_ format: DocumentFormat) {
         if format == .link { linkTitle = document.selectedText; linkAddress = ""; showLink = true }
@@ -299,6 +337,7 @@ struct TaskDetailView: View {
         Button("创建副本",systemImage: "doc.on.doc") { store.duplicate(task.id) }
         Button("复制链接",systemImage: "link") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString("ownlist://task?id=\(task.id)",forType: .string) }
         Button("打开便签",systemImage: "note.text") { DesktopBridge.panel(title: task.title,view: TaskNoteView(taskID: task.id).environmentObject(store)) }
+        Button("插入或编辑思维导图",systemImage:"point.3.connected.trianglepath.dotted") { beginMindMap() }
         Menu("导出文档",systemImage: "square.and.arrow.up") {
             Button("Word 文档（.docx）") { exportDocument(task,format: .word) }
             Button("PDF 文档（.pdf）") { exportDocument(task,format: .pdf) }
