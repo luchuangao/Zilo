@@ -225,7 +225,7 @@ struct MainView: View {
     func nav(_ text: String,_ icon: String,_ key: String) -> some View { sidebarChoice(text,icon,key,count: key == "trash" ? store.trashEntryCount : filtered(key).filter { !$0.completed }.count) }
     func listRow(_ list: TaskList) -> some View {
         let count = store.tasks.filter { $0.listID == list.id && !$0.deleted && !$0.completed && !$0.isTemplate && $0.archived != true && $0.parentID == nil }.count
-        return sidebarChoice(list.name,"line.3.horizontal","list:" + list.id.uuidString,color: list.color.listColor,count: count)
+        return sidebarChoice(list.name,"line.3.horizontal","list:" + list.id.uuidString,color: list.color == "none" ? nil : list.color.listColor,count: count)
             .contextMenu { Button("编辑清单") { listEditorRequest = ListEditorRequest(existing: list) }; Button("删除清单",role: .destructive) { if store.deleteList(list.id) { selection = "trash" } } }
             .dropDestination(for: String.self) { values,_ in for value in values { if let id = UUID(uuidString: value) { store.mutate(id) { $0.listID = list.id } } }; return true }
     }

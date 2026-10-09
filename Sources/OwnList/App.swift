@@ -72,14 +72,25 @@ enum ListTheme {
     static var accent: Color { adaptive(0x526AE8,0x9BAAFF) }
 }
 extension String {
-    var listColor: Color { switch self {
-    case "green": return ListTheme.adaptive(0x4D9167,0x8ED3A9)
-    case "orange": return ListTheme.adaptive(0xBA7729,0xE9B574)
-    case "purple": return ListTheme.adaptive(0x8665CD,0xC1A5F4)
-    case "red": return ListTheme.adaptive(0xD54859,0xFF8E9B)
+    var listColor: Color {
+        if hasPrefix("#"), count == 7, let value = Int(dropFirst(),radix: 16) {
+            return Color(red: Double((value >> 16) & 255) / 255,
+                         green: Double((value >> 8) & 255) / 255,
+                         blue: Double(value & 255) / 255)
+        }
+        switch self {
+    case "none": return ListTheme.secondary
+    case "red": return Color(red: 237 / 255,green: 108 / 255,blue: 103 / 255)
+    case "orange": return Color(red: 243 / 255,green: 176 / 255,blue: 82 / 255)
+    case "yellow": return Color(red: 248 / 255,green: 213 / 255,blue: 80 / 255)
+    case "lime": return Color(red: 231 / 255,green: 234 / 255,blue: 103 / 255)
+    case "green": return Color(red: 108 / 255,green: 213 / 255,blue: 123 / 255)
+    case "blue": return Color(red: 98 / 255,green: 159 / 255,blue: 248 / 255)
+    case "purple": return Color(red: 112 / 255,green: 117 / 255,blue: 237 / 255)
     case "pink": return ListTheme.adaptive(0xC76093,0xEDA8CB)
     default: return ListTheme.accent
-    } }
+        }
+    }
 }
 struct QuietHover: ViewModifier {
     var selected = false
@@ -105,7 +116,7 @@ struct QuietEmptyState: View {
     }
 }
 
-extension String { var colorLabel: String { ["blue":"蓝色","green":"绿色","orange":"橙色","purple":"紫色","red":"红色","pink":"粉色"][self] ?? self } }
+extension String { var colorLabel: String { ["none":"无颜色","blue":"蓝色","green":"绿色","orange":"橙色","yellow":"黄色","lime":"黄绿色","purple":"紫色","red":"红色","pink":"粉色"][self] ?? (hasPrefix("#") ? "自定义颜色" : self) } }
 
 /// Keep swatches in SwiftUI; native menu images otherwise become monochrome.
 struct ThemeColorChoices: View {

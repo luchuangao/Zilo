@@ -772,6 +772,17 @@ final class OwnListTests: XCTestCase {
         store.redo(); XCTAssertEqual(store.lists.first?.name,"读书")
         XCTAssertEqual(try store.persistence.load(TaskList.self).first?.folder,"")
     }
+    @MainActor func testListPaletteAndCustomColorSurviveReload() throws {
+        let store = Store(persistence: Persistence(inMemory: true))
+        let list = try store.commitList(existing: nil,name: "配色",folder: "",color: "#12AB34",sections: "")
+        store.reload()
+        XCTAssertEqual(store.lists.first { $0.id == list.id }?.color,"#12AB34")
+        let custom = try XCTUnwrap(NSColor("#12AB34".listColor).usingColorSpace(.deviceRGB))
+        XCTAssertEqual(custom.redComponent,18.0 / 255,accuracy: 0.005)
+        XCTAssertEqual(custom.greenComponent,171.0 / 255,accuracy: 0.005)
+        let green = try XCTUnwrap(NSColor("green".listColor).usingColorSpace(.deviceRGB))
+        XCTAssertEqual(green.greenComponent,213.0 / 255,accuracy: 0.005)
+    }
     @MainActor func testQuickEntryContextAndDateOverride() throws {
         let store = Store(persistence: Persistence(inMemory: true))
         let list = try store.commitList(existing: nil,name: "验收",folder: "",color: "blue",sections: "准备",defaultView: "看板")

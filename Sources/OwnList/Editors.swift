@@ -450,36 +450,104 @@ struct ListEditor: View {
     @State private var color = "blue"
     @State private var sections = ""
     @State private var defaultView = "列表"
+    @State private var showsSections = false
     @State private var failure: String?
     @FocusState private var nameFocused: Bool
     var cleanName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
+    private let views: [(name: String, symbol: String)] = [
+        ("列表","list.bullet.rectangle"),("看板","rectangle.split.3x1"),("时间线","chart.bar.xaxis")
+    ]
     var body: some View {
-        VStack(alignment: .leading,spacing: 16) {
-            Text(existing == nil ? "新建清单" : "编辑清单").font(.title2.bold())
-            Form {
-                TextField("清单名称",text: $name).focused($nameFocused)
-                HStack {
-                    TextField("文件夹",text: $folder)
-                    Menu {
-                        Button("不放入文件夹") { folder = "" }
-                        ForEach(Array(Set(store.lists.filter { !$0.deleted && !$0.folder.isEmpty }.map(\.folder))).sorted(),id: \.self) { value in Button(value) { folder = value } }
-                    } label: { Image(systemName: "folder") }.help("选择已有文件夹")
+        HStack(spacing: 0) {
+            VStack(alignment: .leading,spacing: 0) {
+                Text(existing == nil ? "新建清单" : "编辑清单")
+                    .font(.system(size: 20,weight: .semibold)).padding(.bottom,16)
+                HStack(spacing: 12) {
+                    Image(systemName: "line.3.horizontal").foregroundStyle(ListTheme.secondary)
+                    TextField("清单名称",text: $name).textFieldStyle(.plain).focused($nameFocused)
+                        .font(.system(size: 17)).accessibilityLabel("清单名称")
                 }
-                Text("留空放在顶层，也可以输入新的文件夹名称。").font(.caption).foregroundStyle(.secondary)
-                ThemeColorChoices(title: "颜色",selection: $color)
-                Picker("默认视图",selection: $defaultView) { ForEach(["列表","看板","时间线"],id: \.self) { Text($0).tag($0) } }
-                TextField("任务分组",text: $sections)
-                Text("使用逗号、中文逗号或换行分隔；空白和重复分组会自动整理。").font(.caption).foregroundStyle(.secondary)
-            }.formStyle(.grouped).frame(height: 320)
-            if let failure { Text(failure).foregroundStyle(.red).font(.callout).fixedSize(horizontal: false,vertical: true).accessibilityLabel("保存失败：" + failure) }
-            HStack {
-                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
-                Spacer()
-                Button(existing == nil ? "创建清单" : "保存修改",action: submit)
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(cleanName.isEmpty)
+                .padding(.horizontal,14).frame(height: 42)
+                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(nameFocused ? ListTheme.accent : ListTheme.separator,lineWidth: nameFocused ? 1.5 : 1))
+                .padding(.bottom,16)
+
+                HStack(spacing: 8) {
+                    Text("清单颜色").foregroundStyle(ListTheme.secondary).frame(width: 74,alignment: .leading)
+                    ListColorChoices(selection: $color)
+                }.padding(.bottom,15)
+
+                HStack(spacing: 8) {
+                    Text("视图类型").foregroundStyle(ListTheme.secondary).frame(width: 74,alignment: .leading)
+                    HStack(spacing: 10) {
+                        ForEach(views,id: \.name) { view in
+                            Button { defaultView = view.name } label: {
+                                Image(systemName: view.symbol).font(.system(size: 20))
+                                    .foregroundStyle(defaultView == view.name ? ListTheme.accent : ListTheme.secondary)
+                                    .frame(width: 48,height: 42)
+                                    .background(defaultView == view.name ? ListTheme.accent.opacity(0.10) : ListTheme.input,in: RoundedRectangle(cornerRadius: 8))
+                                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(defaultView == view.name ? ListTheme.accent : .clear))
+                            }.buttonStyle(.plain).help(view.name).accessibilityLabel(view.name)
+                                .accessibilityAddTraits(defaultView == view.name ? .isSelected : [])
+                        }
+                    }
+                }.padding(.bottom,13)
+
+                HStack(spacing: 8) {
+                    Text("文件夹").foregroundStyle(ListTheme.secondary).frame(width: 74,alignment: .leading)
+                    HStack(spacing: 4) {
+                        TextField("无",text: $folder).textFieldStyle(.plain)
+                            .accessibilityLabel("文件夹，可输入新名称")
+                        Menu {
+                            Button("无") { folder = "" }
+                            ForEach(Array(Set(store.lists.filter { !$0.deleted && !$0.folder.isEmpty }.map(\.folder))).sorted(),id: \.self) { value in
+                                Button(value) { folder = value }
+                            }
+                        } label: { Image(systemName: "chevron.down").font(.system(size: 11)).foregroundStyle(ListTheme.secondary) }
+                            .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().help("选择已有文件夹")
+                    }
+                    .padding(.horizontal,12).frame(height: 36)
+                    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ListTheme.separator))
+                }
+
+                DisclosureGroup("任务分组",isExpanded: $showsSections) {
+                    TextField("例如：待办，进行中，完成",text: $sections).textFieldStyle(.roundedBorder)
+                        .accessibilityLabel("任务分组")
+                }.font(.system(size: 12)).foregroundStyle(ListTheme.secondary).padding(.top,18)
+
+                if let failure {
+                    Text(failure).font(.callout).foregroundStyle(.red).fixedSize(horizontal: false,vertical: true)
+                        .padding(.top,8).accessibilityLabel("保存失败：" + failure)
+                }
+                Spacer(minLength: 12)
+                HStack(spacing: 8) {
+                    Spacer()
+                    Button { dismiss() } label: {
+                        Text("取消").frame(width: 78,height: 32)
+                            .background(ListTheme.canvas,in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(ListTheme.separator))
+                    }.buttonStyle(.plain).keyboardShortcut(.cancelAction)
+                    Button(action: submit) {
+                        Text(existing == nil ? "创建" : "保存").foregroundStyle(.white)
+                            .frame(width: 78,height: 32)
+                            .background(ListTheme.accent,in: RoundedRectangle(cornerRadius: 8))
+                    }.buttonStyle(.plain).keyboardShortcut(.defaultAction).disabled(cleanName.isEmpty)
+                        .opacity(cleanName.isEmpty ? 0.45 : 1)
+                }
             }
-        }.padding(24).frame(width: 480).onAppear {
-            if let value = existing { name = value.name; folder = value.folder; color = value.color; sections = value.sections.joined(separator: "，"); defaultView = value.defaultView ?? "列表" }
+            .padding(.horizontal,28).padding(.top,20).padding(.bottom,24)
+            .frame(width: 395,height: 430)
+            Rectangle().fill(ListTheme.separator).frame(width: 1)
+            ListEditorPreview(name: cleanName,color: color,view: defaultView)
+                .frame(width: 370,height: 430)
+        }
+        .background(ListTheme.canvas)
+        .onAppear {
+            if let value = existing {
+                name = value.name; folder = value.folder; color = value.color
+                sections = value.sections.joined(separator: "，")
+                defaultView = value.defaultView ?? "列表"
+                showsSections = !value.sections.isEmpty
+            }
             nameFocused = true
         }
     }
@@ -488,6 +556,137 @@ struct ListEditor: View {
             let value = try store.commitList(existing: existing,name: name,folder: folder,color: color,sections: sections,defaultView: defaultView)
             onSaved(value); dismiss()
         } catch { failure = error.localizedDescription }
+    }
+}
+
+private struct ListColorChoices: View {
+    @Binding var selection: String
+    @State private var colorPanel = ListColorPanelController()
+    private let colors = ["none","red","orange","yellow","lime","green","blue","purple"]
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(colors,id: \.self) { value in
+                Button { selection = value } label: {
+                    ZStack {
+                        Circle().fill(value == "none" ? ListTheme.canvas : value.listColor)
+                            .frame(width: 22,height: 22)
+                        if value == "none" {
+                            Circle().strokeBorder(ListTheme.separator,lineWidth: 1).frame(width: 22,height: 22)
+                            Rectangle().fill(Color.red.opacity(0.75)).frame(width: 25,height: 1.5).rotationEffect(.degrees(-45))
+                        } else if selection == value {
+                            Image(systemName: "checkmark").font(.system(size: 10,weight: .bold))
+                                .foregroundStyle(["yellow","lime"].contains(value) ? ListTheme.text : .white)
+                        }
+                        if selection == value {
+                            Circle().strokeBorder(ListTheme.accent.opacity(0.45),lineWidth: 1.5).frame(width: 28,height: 28)
+                        }
+                    }.frame(width: 28,height: 30).contentShape(Rectangle())
+                }.buttonStyle(.plain).help(value.colorLabel).accessibilityLabel(value.colorLabel)
+                    .accessibilityAddTraits(selection == value ? .isSelected : [])
+            }
+            Button { colorPanel.open(color: selection.hasPrefix("#") ? selection.listColor : "green".listColor,selection: $selection) } label: {
+                ZStack {
+                    Circle().strokeBorder(
+                        AngularGradient(colors: [.red,.orange,.yellow,.green,.blue,.purple,.red],center: .center),
+                        lineWidth: 2
+                    ).frame(width: 25,height: 25)
+                    Circle().fill(selection.hasPrefix("#") ? selection.listColor : "green".listColor)
+                        .frame(width: 17,height: 17)
+                }.frame(width: 28,height: 30).contentShape(Rectangle())
+            }.buttonStyle(.plain).help("自定义颜色").accessibilityLabel("自定义颜色")
+                .accessibilityAddTraits(selection.hasPrefix("#") ? .isSelected : [])
+        }
+        .onDisappear { colorPanel.detach() }
+    }
+}
+
+private final class ListColorPanelController: NSObject {
+    private var selection: Binding<String>?
+    func open(color: Color,selection: Binding<String>) {
+        self.selection = selection
+        let panel = NSColorPanel.shared
+        panel.color = NSColor(color)
+        panel.showsAlpha = false
+        panel.setTarget(self)
+        panel.setAction(#selector(colorChanged(_:)))
+        panel.makeKeyAndOrderFront(nil)
+    }
+    func detach() {
+        guard selection != nil else { return }
+        NSColorPanel.shared.setTarget(nil)
+        NSColorPanel.shared.setAction(nil)
+        selection = nil
+    }
+    @objc private func colorChanged(_ sender: NSColorPanel) {
+        guard let rgb = sender.color.usingColorSpace(.deviceRGB) else { return }
+        selection?.wrappedValue = String(format: "#%02X%02X%02X",
+                                          Int((rgb.redComponent * 255).rounded()),
+                                          Int((rgb.greenComponent * 255).rounded()),
+                                          Int((rgb.blueComponent * 255).rounded()))
+    }
+}
+
+private struct ListEditorPreview: View {
+    let name: String
+    let color: String
+    let view: String
+    private var tint: Color { color == "none" ? ListTheme.secondary : color.listColor }
+    private func line(_ width: CGFloat,_ height: CGFloat = 7) -> some View {
+        RoundedRectangle(cornerRadius: 3).fill(ListTheme.separator.opacity(0.7)).frame(width: width,height: height)
+    }
+    private func taskRow(_ width: CGFloat) -> some View {
+        HStack(spacing: 9) {
+            RoundedRectangle(cornerRadius: 3).strokeBorder(tint,lineWidth: 1.5).frame(width: 12,height: 12)
+            line(width)
+        }.frame(maxWidth: .infinity,alignment: .leading)
+    }
+    var body: some View {
+        ZStack {
+            tint.opacity(0.055)
+            VStack(alignment: .leading,spacing: 0) {
+                Text("实时预览").font(.system(size: 11)).foregroundStyle(ListTheme.secondary)
+                    .padding(.bottom,14)
+                VStack(alignment: .leading,spacing: 18) {
+                    HStack(spacing: 9) {
+                        Image(systemName: "line.3.horizontal").foregroundStyle(tint)
+                        Text(name.isEmpty ? "清单名称" : name).font(.system(size: 15,weight: .semibold)).lineLimit(1)
+                    }
+                    line(230,22)
+                    if view == "看板" {
+                        HStack(alignment: .top,spacing: 8) {
+                            previewColumn("待办")
+                            previewColumn("进行中")
+                        }
+                    } else if view == "时间线" {
+                        ForEach(0..<3,id: \.self) { index in
+                            HStack(spacing: 10) {
+                                line(28)
+                                RoundedRectangle(cornerRadius: 4).fill(tint.opacity(index == 1 ? 0.38 : 0.17))
+                                    .frame(width: index == 1 ? 125 : 88,height: 17)
+                            }
+                        }
+                    } else {
+                        line(50)
+                        taskRow(128); taskRow(98); taskRow(165)
+                        line(42).padding(.top,10)
+                        taskRow(147); taskRow(112)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(20).frame(height: 320,alignment: .topLeading)
+                .frame(maxWidth: .infinity,alignment: .topLeading)
+                .background(ListTheme.canvas,in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(ListTheme.separator.opacity(0.7)))
+            }.padding(24)
+        }.accessibilityElement(children: .ignore)
+            .accessibilityLabel("清单预览，\(name.isEmpty ? "清单名称" : name)，\(color.colorLabel)，\(view)视图")
+    }
+    private func previewColumn(_ title: String) -> some View {
+        VStack(alignment: .leading,spacing: 12) {
+            Text(title).font(.system(size: 10,weight: .medium)).foregroundStyle(ListTheme.secondary)
+            taskRow(58); taskRow(78)
+        }.padding(10).frame(maxWidth: .infinity,alignment: .leading)
+            .background(ListTheme.input,in: RoundedRectangle(cornerRadius: 7))
     }
 }
 struct FilterEditor: View {
