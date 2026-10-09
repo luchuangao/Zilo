@@ -934,11 +934,25 @@ extension OwnListTests {
         XCTAssertTrue(MarkdownSourceEditing.handle(#selector(NSResponder.insertLineBreak(_:)),in: soft))
         XCTAssertEqual(soft.string,"- 指标名称\n")
     }
+    @MainActor func testMarkdownShiftReturnWhenAppKitDispatchesInsertNewline() {
+        let editor = sourceEditor("- 指标名称 metric")
+        XCTAssertTrue(MarkdownSourceEditing.handle(#selector(NSResponder.insertNewline(_:)),in: editor,modifiers: [.shift]))
+        XCTAssertEqual(editor.string,"- 指标名称 metric\n")
+        let quote = sourceEditor("> 说明😀")
+        XCTAssertTrue(MarkdownSourceEditing.handle(#selector(NSResponder.insertNewline(_:)),in: quote,modifiers: [.shift]))
+        XCTAssertEqual(quote.string,"> 说明😀\n")
+        let regular = sourceEditor("- 项目")
+        XCTAssertTrue(MarkdownSourceEditing.handle(#selector(NSResponder.insertNewline(_:)),in: regular))
+        XCTAssertEqual(regular.string,"- 项目\n- ")
+    }
     @MainActor func testMarkdownSourceFenceIndentationAndMarkedText() {
         for fence in ["```python","~~~~bash"] {
             let editor = sourceEditor(fence + "\n    - literal")
             XCTAssertTrue(MarkdownSourceEditing.newline(in: editor))
             XCTAssertEqual(editor.string,fence + "\n    - literal\n    ")
+            let codeTab = sourceEditor(fence + "\n    - literal")
+            MarkdownSourceEditing.indent(in: codeTab,outdent: false)
+            XCTAssertEqual(codeTab.string,fence + "\n    - literal\t","代码中的列表符号应保持原样")
         }
         let closed = sourceEditor("```\n- literal\n```\n- 项目")
         XCTAssertTrue(MarkdownSourceEditing.newline(in: closed)); XCTAssertTrue(closed.string.hasSuffix("\n- 项目\n- "))

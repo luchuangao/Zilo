@@ -319,7 +319,10 @@ struct DetailDocumentEditor: NSViewRepresentable {
         }
         func textView(_ textView: NSTextView,doCommandBy commandSelector: Selector) -> Bool {
             guard !textView.hasMarkedText() else { return false }
-            if !parent.rich { return MarkdownSourceEditing.handle(commandSelector,in: textView) }
+            if !parent.rich {
+                return MarkdownSourceEditing.handle(commandSelector,in: textView,
+                    modifiers: NSApp.currentEvent?.modifierFlags ?? [])
+            }
             if commandSelector == #selector(NSResponder.insertNewline(_:)) { return MarkdownTyping.insertNewline(in: textView) }
             if commandSelector == #selector(NSResponder.insertTab(_:)), MarkdownTyping.isCodeBlock(textView.typingAttributes) {
                 textView.insertText("\t",replacementRange: textView.selectedRange()); return true
@@ -712,10 +715,16 @@ enum MarkdownTyping {
 /// Editing commands for literal Markdown. Only explicit keyboard/toolbar actions
 /// modify the source, using native replacements so undo and IME remain intact.
 enum MarkdownSourceEditing {
-    static func handle(_ command: Selector,in editor: NSTextView) -> Bool {
+    static func handle(_ command: Selector,in editor: NSTextView,modifiers: NSEvent.ModifierFlags = []) -> Bool {
         guard !editor.isRichText,!editor.hasMarkedText() else { return false }
         switch command {
-        case #selector(NSResponder.insertNewline(_:)): return newline(in: editor)
+        case #selector(NSResponder.insertNewline(_:)):
+            // AppKit may dispatch Shift+Return as insertNewline rather than
+            // insertLineBreak, depending on the active key bindings.
+            if modifiers.contains(.shift) {
+                editor.insertText("\n",replacementRange: editor.selectedRange()); return true
+            }
+            return newline(in: editor)
         case #selector(NSResponder.insertLineBreak(_:)):
             editor.insertText("\n",replacementRange: editor.selectedRange()); return true
         case #selector(NSResponder.insertTab(_:)): indent(in: editor,outdent: false); return true
@@ -799,6 +808,7 @@ enum MarkdownSourceEditing {
         let range = linesRange(selection,in: text),block = text.substring(with: range)
         // Within prose or code, a single Tab inserts a literal tab at the caret.
         if !outdent,selection.length == 0,
+           insideFence(text,before: range.location) ||
            match(#"^[ \t]*(?:>[ \t]*)*(?:[-+*]|\d{1,9}[.)])[ \t]+"#,block) == nil {
             editor.insertText("\t",replacementRange: selection); return
         }
