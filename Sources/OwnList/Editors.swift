@@ -944,8 +944,10 @@ private func beginRecordDrag(in view: NSView,event: NSEvent,payload: String,sour
     let point = view.convert(event.locationInWindow,from: nil)
     let writer = NSPasteboardItem(); writer.setString(payload,forType: .string)
     let item = NSDraggingItem(pasteboardWriter: writer)
-    let image = NSImage(systemSymbolName: "line.3.horizontal",accessibilityDescription: nil) ?? NSImage(size: NSSize(width: 12,height: 12))
-    item.setDraggingFrame(NSRect(x: point.x - 6,y: point.y - 6,width: 12,height: 12),contents: image)
+    // Placement feedback already identifies the destination. Keep AppKit's drag
+    // image transparent so a detached grip does not follow the pointer.
+    let image = NSImage(size: NSSize(width: 1,height: 1),flipped: false) { _ in true }
+    item.setDraggingFrame(NSRect(x: point.x,y: point.y,width: 1,height: 1),contents: image)
     view.beginDraggingSession(with: [item],event: event,source: source)
 }
 
@@ -1015,7 +1017,6 @@ struct TaskDragHandle: NSViewRepresentable {
     var onDoubleClick: (() -> Void)? = nil
     var accessibilityName = "拖动任务"
     var excludedTitleHeight: CGFloat? = nil
-    var usesDragCursor = true
     func makeNSView(context: Context) -> TaskDragHandleView {
         let view = TaskDragHandleView(); view.title = ""; view.isBordered = false
         view.target = view; view.action = #selector(TaskDragHandleView.activate)
@@ -1025,10 +1026,6 @@ struct TaskDragHandle: NSViewRepresentable {
         view.payload = payload; view.showsGrip = visible; view.onBegin = onBegin; view.onClick = onClick
         view.onDoubleClick = onDoubleClick
         view.excludedTitleHeight = excludedTitleHeight
-        if view.usesDragCursor != usesDragCursor {
-            view.usesDragCursor = usesDragCursor
-            view.window?.invalidateCursorRects(for: view)
-        }
         view.setAccessibilityLabel(accessibilityName); view.needsDisplay = true
     }
 }
@@ -1041,7 +1038,6 @@ final class TaskDragHandleView: NSButton,NSDraggingSource {
     var onClick: (() -> Void)?
     var onDoubleClick: (() -> Void)?
     var excludedTitleHeight: CGFloat?
-    var usesDragCursor = true
     private var mouseDownEvent: NSEvent?
     private var beganDragging = false
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -1052,13 +1048,12 @@ final class TaskDragHandleView: NSButton,NSDraggingSource {
         return super.hitTest(point)
     }
     override func resetCursorRects() {
-        guard usesDragCursor else { addCursorRect(bounds,cursor: .arrow); return }
         if let height = excludedTitleHeight {
-            addCursorRect(NSRect(x: 0,y: 0,width: bounds.width,height: min(10,bounds.height)),cursor: .openHand)
-            addCursorRect(NSRect(x: 0,y: 0,width: min(16,bounds.width),height: bounds.height),cursor: .openHand)
+            addCursorRect(NSRect(x: 0,y: 0,width: bounds.width,height: min(10,bounds.height)),cursor: .arrow)
+            addCursorRect(NSRect(x: 0,y: 0,width: min(16,bounds.width),height: bounds.height),cursor: .arrow)
             let bottom = min(bounds.height,10 + height)
-            addCursorRect(NSRect(x: 0,y: bottom,width: bounds.width,height: bounds.height - bottom),cursor: .openHand)
-        } else { addCursorRect(bounds,cursor: .openHand) }
+            addCursorRect(NSRect(x: 0,y: bottom,width: bounds.width,height: bounds.height - bottom),cursor: .arrow)
+        } else { addCursorRect(bounds,cursor: .arrow) }
     }
     override func draw(_ dirtyRect: NSRect) {
         guard showsGrip,let image = NSImage(systemSymbolName: "line.3.horizontal",accessibilityDescription: "拖动任务") else { return }

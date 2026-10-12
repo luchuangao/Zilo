@@ -301,7 +301,7 @@ struct MainView: View {
             .overlay {
                 if key.hasPrefix("list:") {
                     TaskDragHandle(payload: "zilo-list:" + key.dropFirst(5),visible: false,onBegin: {},
-                        onClick: { selection = key; sidebarFocused = true },accessibilityName: "拖动清单“" + text + "”",usesDragCursor: false)
+                        onClick: { selection = key; sidebarFocused = true },accessibilityName: "拖动清单“" + text + "”")
                         .frame(maxWidth: .infinity,maxHeight: .infinity)
                         .help("拖动调整清单顺序或文件夹")
                 }
