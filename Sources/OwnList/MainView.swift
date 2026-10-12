@@ -288,9 +288,7 @@ struct MainView: View {
         Button { selection = key; sidebarFocused = true } label: {
             HStack(spacing: 10) {
                 if key.hasPrefix("list:") {
-                    TaskDragHandle(payload: "zilo-list:" + key.dropFirst(5),visible: true,onBegin: {},
-                        onClick: { selection = key; sidebarFocused = true },accessibilityName: "拖动清单“" + text + "”")
-                        .frame(width: 20,height: 28).help("拖动调整清单顺序或文件夹")
+                    Image(systemName: "line.3.horizontal").font(.system(size: 16)).frame(width: 20).foregroundStyle(ListTheme.text)
                 } else {
                     Image(systemName: icon).font(.system(size: 16)).frame(width: 20).foregroundStyle(ListTheme.text)
                 }
@@ -300,6 +298,14 @@ struct MainView: View {
                 if count > 0 { Text("\(count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(ListTheme.secondary) }
             }.padding(.horizontal,12).frame(minHeight: 36).contentShape(Rectangle())
         }.buttonStyle(.plain).foregroundStyle(ListTheme.text).quietHover(selected: selection == key)
+            .overlay {
+                if key.hasPrefix("list:") {
+                    TaskDragHandle(payload: "zilo-list:" + key.dropFirst(5),visible: false,onBegin: {},
+                        onClick: { selection = key; sidebarFocused = true },accessibilityName: "拖动清单“" + text + "”")
+                        .frame(maxWidth: .infinity,maxHeight: .infinity)
+                        .help("拖动调整清单顺序或文件夹")
+                }
+            }
             .id(key).accessibilityAddTraits(selection == key ? .isSelected : [])
     }
     func nav(_ text: String,_ icon: String,_ key: String) -> some View { sidebarChoice(text,icon,key,count: key == "trash" ? store.trashEntryCount : ["completed","archived"].contains(key) ? filtered(key).count : filtered(key).filter { !$0.completed }.count) }
@@ -479,7 +485,7 @@ struct TaskWorkspace: View {
                 if let value, !value.isEmpty, store.tasks.first(where: { $0.id == task.id })?.title != value {
                     store.mutate(task.id) { $0.title = value }
                 }
-            },onDoubleClick: { openTaskWindow(task.id) })
+            },onDoubleClick: { openTaskWindow(task.id) },dragPayload: task.id.uuidString,onDragBegin: finishRenaming)
             .frame(maxWidth: .infinity).frame(height: max(20,taskFontSize + 6))
             .help("单击修改名称，双击打开独立窗口")
     }
@@ -492,15 +498,59 @@ struct TaskWorkspace: View {
         if point.y > height - min(12,height * 0.25) { return .after }
         return .child
     }
-    func row(_ t: TaskItem) -> some View { HStack(alignment: .top,spacing: 6) {
-        if store.tasks.contains(where: { $0.parentID == t.id && !$0.deleted }) {
-            Button { if collapsedTasks.contains(t.id) { collapsedTasks.remove(t.id) } else { collapsedTasks.insert(t.id) } } label: { Image(systemName: collapsedTasks.contains(t.id) ? "chevron.right" : "chevron.down").font(.system(size: 10)).frame(width: 12,height: 20) }.buttonStyle(.plain).accessibilityLabel(collapsedTasks.contains(t.id) ? "展开子任务" : "收起子任务")
-        } else { Color.clear.frame(width: 12,height: 20) }
+    func row(_ t: TaskItem) -> some View {
+        let children = store.tasks.filter { $0.parentID == t.id && !$0.deleted }
+        let summary = TaskDocument.summary(t)
+        let hasContent = !t.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let statusDescriptions: [String?] = [children.isEmpty ? nil : ZiloLanguage.text("子任务") + " \(children.filter(\.completed).count)/\(children.count)",hasContent ? ZiloLanguage.text("任务正文") : nil,t.attachments.isEmpty ? nil : ZiloLanguage.text("附件")]
+        let statusHelp = statusDescriptions.compactMap { $0 }.joined(separator: " · ")
+        return HStack(alignment: .top,spacing: 6) {
+        if !children.isEmpty {
+            Button { finishRenaming(); if collapsedTasks.contains(t.id) { collapsedTasks.remove(t.id) } else { collapsedTasks.insert(t.id) } } label: {
+                Image(systemName: collapsedTasks.contains(t.id) ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 11)).offset(y: -3).frame(width: 24,height: 28).contentShape(Rectangle())
+            }.buttonStyle(.plain).quietHover().help(collapsedTasks.contains(t.id) ? "展开子任务" : "收起子任务")
+                .accessibilityLabel(collapsedTasks.contains(t.id) ? "展开子任务" : "收起子任务")
+        } else { Color.clear.frame(width: 24,height: 20) }
         if batchMode { Toggle("选择",isOn: Binding(get: { multi.contains(t.id) },set: { if $0 { multi.insert(t.id) } else { multi.remove(t.id) } })).labelsHidden().toggleStyle(.checkbox) }
         Button { store.complete(t.id) } label: { Image(systemName: t.completed ? "checkmark.square.fill" : "square").font(.system(size: 17)).foregroundStyle(t.completed ? ListTheme.secondary.opacity(0.7) : t.priority == 3 ? "red".listColor : t.priority == 2 ? "orange".listColor : t.priority == 1 ? Color.accentColor : ListTheme.secondary) }.buttonStyle(.plain).accessibilityLabel(t.completed ? "取消完成" : "完成任务")
-        VStack(alignment: .leading,spacing: 5) { taskTitle(t); if showSummaries && !TaskDocument.summary(t).isEmpty { Text(TaskDocument.summary(t)).font(.caption).foregroundStyle(ListTheme.secondary).lineLimit(1) }; if t.due != nil || !t.tags.isEmpty || !t.attachments.isEmpty || t.repeatRule.frequency != "none" || store.tasks.contains(where: { $0.parentID == t.id && !$0.deleted }) { HStack(spacing: 8) { if let due = t.due { Text(due.formatted(date: .abbreviated,time: t.allDay ? .omitted : .shortened)).foregroundStyle(Scheduling.isOverdue(t) ? .red : .secondary) }; if !t.tags.isEmpty { Text(t.tags.map { "#" + $0 }.joined(separator: " ")).foregroundStyle(Color.accentColor) }; if !t.attachments.isEmpty { Image(systemName: "paperclip") }; let children = store.tasks.filter { $0.parentID == t.id && !$0.deleted }; if !children.isEmpty { Text("\(children.filter(\.completed).count)/\(children.count)") }; if t.repeatRule.frequency != "none" { Image(systemName: "repeat") } }.font(.caption).foregroundStyle(ListTheme.secondary) } }
+        VStack(alignment: .leading,spacing: 5) {
+            HStack(spacing: 8) {
+                taskTitle(t)
+                if !children.isEmpty || hasContent || !t.attachments.isEmpty {
+                    HStack(spacing: 7) {
+                        if !children.isEmpty {
+                            Image(systemName: "arrow.turn.down.right")
+                                .accessibilityLabel(ZiloLanguage.text("子任务") + ", \(children.filter(\.completed).count)/\(children.count)")
+                        }
+                        if hasContent { Image(systemName: "note.text").accessibilityLabel("任务正文") }
+                        if !t.attachments.isEmpty { Image(systemName: "paperclip").accessibilityLabel("附件") }
+                    }.font(.system(size: 12)).foregroundStyle(ListTheme.secondary.opacity(0.6)).fixedSize()
+                        .overlay {
+                            TaskDragHandle(payload: t.id.uuidString,visible: false,onBegin: finishRenaming,
+                                onClick: { finishRenaming(); store.selectedTask = t.id; collapsedTasks.remove(t.id) },onDoubleClick: { openTaskWindow(t.id) })
+                                .frame(maxWidth: .infinity,maxHeight: .infinity).accessibilityHidden(true)
+                                .help(statusHelp)
+                        }
+                }
+            }
+            if showSummaries && !summary.isEmpty { Text(summary).font(.caption).foregroundStyle(ListTheme.secondary).lineLimit(1) }
+            if t.due != nil || !t.tags.isEmpty || t.repeatRule.frequency != "none" {
+                HStack(spacing: 8) {
+                    if let due = t.due { Text(due.formatted(date: .abbreviated,time: t.allDay ? .omitted : .shortened)).foregroundStyle(Scheduling.isOverdue(t) ? .red : .secondary) }
+                    if !t.tags.isEmpty { Text(t.tags.map { "#" + $0 }.joined(separator: " ")).foregroundStyle(Color.accentColor) }
+                    if t.repeatRule.frequency != "none" { Image(systemName: "repeat") }
+                }.font(.caption).foregroundStyle(ListTheme.secondary)
+            }
+        }
         Spacer(); if t.starred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
     }.padding(.vertical,10).padding(.leading,16).padding(.trailing,4).background { RoundedRectangle(cornerRadius: 8).fill(store.selectedTask == t.id ? ListTheme.selection : hoveredTaskHandle == t.id ? ListTheme.hover : .clear).padding(.leading,12) }.background { TaskRowHover { hoveredTaskHandle = $0 ? t.id : (hoveredTaskHandle == t.id ? nil : hoveredTaskHandle) } }.overlay(alignment: .bottom) { if store.selectedTask != t.id { ListTheme.separator.frame(height: 0.5).padding(.leading,57) } }.contentShape(Rectangle()).background { GeometryReader { proxy in Color.clear.onAppear { rowHeights[t.id] = proxy.size.height }.onChange(of: proxy.size.height) { _,height in rowHeights[t.id] = height } } }
+        .overlay {
+            TaskDragHandle(payload: t.id.uuidString,visible: false,onBegin: finishRenaming,
+                onClick: { finishRenaming(); store.selectedTask = t.id; collapsedTasks.remove(t.id) },onDoubleClick: { openTaskWindow(t.id) },excludedTitleHeight: max(children.isEmpty ? 20 : 28,taskFontSize + 6))
+                .frame(maxWidth: .infinity,maxHeight: .infinity)
+                .accessibilityHidden(true).allowsHitTesting(!batchMode)
+        }
         .overlay(alignment: .topLeading) {
             TaskDragHandle(payload: t.id.uuidString,visible: hoveredTaskHandle == t.id,onBegin: finishRenaming)
                 .frame(width: 16,height: 24).offset(x: 0,y: 8)

@@ -4,6 +4,30 @@ import PDFKit
 @testable import OwnList
 
 final class DocumentConsistencyTests: XCTestCase {
+    @MainActor func testWholeRowDragSurfacePreservesTitleAndCompletionControls() {
+        let host = NSView(frame: NSRect(x: 0,y: 0,width: 400,height: 80))
+        let surface = TaskDragHandleView(frame: host.bounds); host.addSubview(surface)
+        func hit(_ x: CGFloat,_ y: CGFloat) -> NSView? { surface.hitTest(surface.convert(NSPoint(x: x,y: y),to: host)) }
+        XCTAssertTrue(hit(360,40) === surface,"The entire list row, including its trailing area, must start a drag")
+        surface.excludedTitleHeight = 20
+        XCTAssertNil(hit(35,20),"Completion and disclosure controls must remain clickable")
+        XCTAssertNil(hit(200,20),"The editable title handles click and drag itself")
+        XCTAssertTrue(hit(200,50) === surface,"Dates and blank row space must support task dragging")
+        XCTAssertTrue(hit(8,20) === surface,"The left drag gutter must remain usable")
+        surface.excludedTitleHeight = 28
+        XCTAssertNil(hit(20,35),"The enlarged disclosure target must not be intercepted by row dragging")
+        XCTAssertTrue(hit(200,45) === surface,"Row dragging must still work below the enlarged controls")
+    }
+    @MainActor func testDraggableTaskTitleStillActivatesEditingOnClickRelease() throws {
+        let field = TaskNameTextField(); field.dragPayload = UUID().uuidString
+        var activations = 0; field.onActivate = { _ in activations += 1 }
+        let down = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseDown,location: NSPoint(x: 20,y: 10),modifierFlags: [],timestamp: 1,windowNumber: 0,context: nil,eventNumber: 1,clickCount: 1,pressure: 1))
+        let up = try XCTUnwrap(NSEvent.mouseEvent(with: .leftMouseUp,location: NSPoint(x: 20,y: 10),modifierFlags: [],timestamp: 1.1,windowNumber: 0,context: nil,eventNumber: 2,clickCount: 1,pressure: 0))
+        field.mouseDown(with: down)
+        XCTAssertEqual(activations,0,"Pressing a title must leave the gesture available for dragging")
+        field.mouseUp(with: up)
+        XCTAssertEqual(activations,1,"A stationary click must still enter title editing")
+    }
     func testThemesMaintainReadableNavigationAndContentInBothAppearances() {
         func contrast(_ a: UInt32,_ b: UInt32) -> Double {
             let first = AppTheme.luminance(a), second = AppTheme.luminance(b)

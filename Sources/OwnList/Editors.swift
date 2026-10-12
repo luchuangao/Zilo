@@ -793,6 +793,8 @@ struct TaskNameField: NSViewRepresentable {
     var onBegin: () -> Void
     var onEnd: (String?) -> Void
     var onDoubleClick: () -> Void = {}
+    var dragPayload: String? = nil
+    var onDragBegin: () -> Void = {}
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
     func makeNSView(context: Context) -> TaskNameTextField {
@@ -812,6 +814,7 @@ struct TaskNameField: NSViewRepresentable {
     func updateNSView(_ field: TaskNameTextField,context: Context) {
         let coordinator = context.coordinator
         coordinator.parent = self
+        field.dragPayload = dragPayload; field.onDragBegin = onDragBegin
         if !coordinator.editing {
             let font = NSFont.systemFont(ofSize: fontSize)
             field.font = font; field.textColor = completed ? .secondaryLabelColor : .labelColor
@@ -868,9 +871,12 @@ struct TaskNameField: NSViewRepresentable {
     }
 }
 
-final class TaskNameTextField: NSTextField {
+final class TaskNameTextField: NSTextField,NSDraggingSource {
     var onActivate: ((NSTextField) -> Void)?
     var onDoubleClick: (() -> Void)?
+    var dragPayload: String?
+    var onDragBegin: (() -> Void)?
+    private var pendingClick: NSEvent?
     private var lastClickPoint = NSPoint.zero
     private var lastClickTime: TimeInterval = 0
     private static weak var activeField: TaskNameTextField?
@@ -899,6 +905,9 @@ final class TaskNameTextField: NSTextField {
         if event.clickCount == 2 {
             window?.makeFirstResponder(nil); onDoubleClick?(); return
         }
+        if dragPayload != nil && currentEditor() == nil {
+            pendingClick = event; return
+        }
         super.mouseDown(with: event)
         // NSTextField selects all on its first click. Match the clicked position instead.
         if event.clickCount == 1,let editor = currentEditor() as? NSTextView {
@@ -908,6 +917,36 @@ final class TaskNameTextField: NSTextField {
         }
         onActivate?(self)
     }
+    override func mouseDragged(with event: NSEvent) {
+        guard let down = pendingClick,let dragPayload else { super.mouseDragged(with: event); return }
+        guard hypot(event.locationInWindow.x - down.locationInWindow.x,event.locationInWindow.y - down.locationInWindow.y) >= 4 else { return }
+        pendingClick = nil; onDragBegin?()
+        beginRecordDrag(in: self,event: event,payload: dragPayload,source: self)
+    }
+    override func mouseUp(with event: NSEvent) {
+        guard pendingClick != nil else { super.mouseUp(with: event); return }
+        pendingClick = nil
+        window?.makeFirstResponder(self)
+        if let editor = currentEditor() as? NSTextView {
+            let point = editor.convert(event.locationInWindow,from: nil)
+            let index = min(editor.characterIndexForInsertion(at: point),(editor.string as NSString).length)
+            editor.setSelectedRange(NSRange(location: index,length: 0))
+        }
+        onActivate?(self)
+    }
+    func draggingSession(_ session: NSDraggingSession,willBeginAt screenPoint: NSPoint) { TaskDragFeedback.shared.begin(session: session.draggingSequenceNumber,payload: dragPayload ?? "") }
+    func draggingSession(_ session: NSDraggingSession,endedAt screenPoint: NSPoint,operation: NSDragOperation) { TaskDragFeedback.shared.end(session: session.draggingSequenceNumber) }
+    func draggingSession(_ session: NSDraggingSession,sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .move }
+    func ignoreModifierKeys(for session: NSDraggingSession) -> Bool { true }
+}
+
+private func beginRecordDrag(in view: NSView,event: NSEvent,payload: String,source: NSDraggingSource) {
+    let point = view.convert(event.locationInWindow,from: nil)
+    let writer = NSPasteboardItem(); writer.setString(payload,forType: .string)
+    let item = NSDraggingItem(pasteboardWriter: writer)
+    let image = NSImage(systemSymbolName: "line.3.horizontal",accessibilityDescription: nil) ?? NSImage(size: NSSize(width: 12,height: 12))
+    item.setDraggingFrame(NSRect(x: point.x - 6,y: point.y - 6,width: 12,height: 12),contents: image)
+    view.beginDraggingSession(with: [item],event: event,source: source)
 }
 
 /// Drop feedback lives only for a native drag session, including cancelled drags.
@@ -973,25 +1012,47 @@ struct TaskDragHandle: NSViewRepresentable {
     var visible: Bool
     var onBegin: () -> Void
     var onClick: (() -> Void)? = nil
+    var onDoubleClick: (() -> Void)? = nil
     var accessibilityName = "拖动任务"
+    var excludedTitleHeight: CGFloat? = nil
     func makeNSView(context: Context) -> TaskDragHandleView {
-        let view = TaskDragHandleView(); view.title = ""; view.isBordered = false; return view
+        let view = TaskDragHandleView(); view.title = ""; view.isBordered = false
+        view.target = view; view.action = #selector(TaskDragHandleView.activate)
+        return view
     }
     func updateNSView(_ view: TaskDragHandleView,context: Context) {
         view.payload = payload; view.showsGrip = visible; view.onBegin = onBegin; view.onClick = onClick
+        view.onDoubleClick = onDoubleClick
+        view.excludedTitleHeight = excludedTitleHeight
         view.setAccessibilityLabel(accessibilityName); view.needsDisplay = true
     }
 }
 final class TaskDragHandleView: NSButton,NSDraggingSource {
+    override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     var payload = ""
     var showsGrip = false
     var onBegin: (() -> Void)?
     var onClick: (() -> Void)?
+    var onDoubleClick: (() -> Void)?
+    var excludedTitleHeight: CGFloat?
     private var mouseDownEvent: NSEvent?
     private var beganDragging = false
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func resetCursorRects() { addCursorRect(bounds,cursor: .openHand) }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let local = convert(point,from: superview)
+        // Disclosure, completion and the native editable title keep their own input.
+        if let height = excludedTitleHeight,local.x >= 16,local.y >= 10,local.y <= 10 + height { return nil }
+        return super.hitTest(point)
+    }
+    override func resetCursorRects() {
+        if let height = excludedTitleHeight {
+            addCursorRect(NSRect(x: 0,y: 0,width: bounds.width,height: min(10,bounds.height)),cursor: .openHand)
+            addCursorRect(NSRect(x: 0,y: 0,width: min(16,bounds.width),height: bounds.height),cursor: .openHand)
+            let bottom = min(bounds.height,10 + height)
+            addCursorRect(NSRect(x: 0,y: bottom,width: bounds.width,height: bounds.height - bottom),cursor: .openHand)
+        } else { addCursorRect(bounds,cursor: .openHand) }
+    }
     override func draw(_ dirtyRect: NSRect) {
         guard showsGrip,let image = NSImage(systemSymbolName: "line.3.horizontal",accessibilityDescription: "拖动任务") else { return }
         image.draw(in: NSRect(x: (bounds.width - 14) / 2,y: (bounds.height - 12) / 2,width: 14,height: 12),from: .zero,operation: .sourceOver,fraction: 0.65)
@@ -1005,17 +1066,15 @@ final class TaskDragHandleView: NSButton,NSDraggingSource {
         guard distance >= 4 else { return }
         beganDragging = true; mouseDownEvent = nil
         onBegin?()
-        let point = convert(event.locationInWindow,from: nil)
-        let writer = NSPasteboardItem(); writer.setString(payload,forType: .string)
-        let item = NSDraggingItem(pasteboardWriter: writer)
-        let image = NSImage(systemSymbolName: "line.3.horizontal",accessibilityDescription: nil) ?? NSImage(size: NSSize(width: 12,height: 12))
-        item.setDraggingFrame(NSRect(x: point.x - 6,y: point.y - 6,width: 12,height: 12),contents: image)
-        beginDraggingSession(with: [item],event: event,source: self)
+        beginRecordDrag(in: self,event: event,payload: payload,source: self)
     }
     override func mouseUp(with event: NSEvent) {
-        if mouseDownEvent != nil && !beganDragging { onClick?() }
+        if mouseDownEvent != nil && !beganDragging {
+            if event.clickCount == 2,let onDoubleClick { onDoubleClick() } else { onClick?() }
+        }
         mouseDownEvent = nil
     }
+    @objc func activate() { onClick?() }
     func draggingSession(_ session: NSDraggingSession,willBeginAt screenPoint: NSPoint) {
         TaskDragFeedback.shared.begin(session: session.draggingSequenceNumber,payload: payload)
     }
