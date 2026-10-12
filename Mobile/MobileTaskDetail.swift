@@ -130,7 +130,9 @@ struct MobileMoveTask: View {
                 Button(task.title) { store.place(id,task.id,position == 0 ? .before : position == 1 ? .child : .after); dismiss() }.foregroundStyle(.primary)
             }
         } }
-        Section { Button("移为顶层任务") { store.mutate(id) { $0.parentID = nil; $0.order = Date().timeIntervalSince1970 }; dismiss() } }
+        if store.tasks.first(where: { $0.id == id })?.parentID != nil {
+            Section { Button("移为顶层任务") { if store.promoteTask(id) { dismiss() } } }
+        }
     }.navigationTitle("移动任务").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } } }
 }
 struct MobileRichTextEditor: UIViewRepresentable {

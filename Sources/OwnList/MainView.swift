@@ -428,9 +428,38 @@ struct TaskWorkspace: View {
     func batch(_ body: (inout TaskItem) -> Void) { let before = store.backup; for id in multi { store.mutate(id,body) }; store.groupUndo(before) }
     func reorder(_ section: String,_ from: IndexSet,_ to: Int) { guard sort == "手动" else { return }; var data = visible.filter { !$0.completed && $0.section == section }; data.move(fromOffsets: from,toOffset: to); let before = store.backup; for (index,t) in data.enumerated() { store.mutate(t.id) { $0.order = Double(index) } }; store.groupUndo(before) }
     func hierarchyRows(_ root: TaskItem) -> some View {
-        ForEach(isTrash ? [TaskHierarchy.Row(task: root,depth: 0)] : TaskHierarchy.rows(root: root,tasks: store.tasks,collapsed: collapsedTasks)) { entry in
-            row(entry.task).padding(.leading,CGFloat(entry.depth) * 24)
+        VStack(alignment: .leading,spacing: 0) {
+            ForEach(isTrash ? [TaskHierarchy.Row(task: root,depth: 0)] : TaskHierarchy.rows(root: root,tasks: store.tasks,collapsed: collapsedTasks)) { entry in
+                row(entry.task).padding(.leading,CGFloat(entry.depth) * 24)
+            }
+            if !isTrash,
+               let raw = dragFeedback.state?.payload,
+               let source = UUID(uuidString: raw),
+               store.tasks.contains(where: { $0.id == source && $0.parentID != nil }) {
+                topLevelDropTarget(after: root)
+            }
         }
+    }
+    func topLevelDropTarget(after root: TaskItem) -> some View {
+        let highlighted = dragFeedback.state?.topLevelTarget == root.id
+        return HStack(spacing: 8) {
+            Rectangle().fill(highlighted ? ListTheme.accent : .clear).frame(height: 2)
+            if highlighted { Text("移为顶层任务").font(.caption2).foregroundStyle(ListTheme.accent).fixedSize() }
+        }
+        .frame(height: 18)
+        .contentShape(Rectangle())
+        .onDrop(of: [.text],delegate: RecordDropDelegate(updated: { _ in
+            dragFeedback.hoverTopLevel(after: root.id)
+        },exited: {
+            dragFeedback.exitTopLevel(after: root.id)
+        },dropped: { raw,_ in
+            guard let id = UUID(uuidString: raw),id != root.id else { return }
+            finishRenaming()
+            if store.placeTask(id,relativeTo: root.id,position: .after) {
+                store.selectedTask = id; onManualSort?()
+            }
+        },activePayload: { dragFeedback.state?.payload }))
+        .accessibilityLabel("拖到这里，移为顶层任务")
     }
     func startRenaming(_ task: TaskItem) {
         finishRenaming()
@@ -491,6 +520,12 @@ struct TaskWorkspace: View {
             if store.placeTask(id,relativeTo: t.id,position: dropPosition(point,task: t)) { collapsedTasks.remove(t.id); store.selectedTask = id; onManualSort?() }
         },activePayload: { dragFeedback.state?.payload })).contextMenu {
         Button("打开详情") { store.selectedTask = t.id }; Button("修改名称") { startRenaming(t) }; Button(batchMode ? "结束批量编辑" : "批量编辑") { batchMode.toggle(); multi = [] }; Button(t.starred ? "取消收藏" : "收藏") { store.mutate(t.id) { $0.starred.toggle() } }
+        if t.parentID != nil {
+            Button("移为顶层任务",systemImage: "arrow.up.left") {
+                finishRenaming()
+                if store.promoteTask(t.id) { store.selectedTask = t.id; onManualSort?() }
+            }
+        }
         if t.isTemplate { Button("从模板创建任务") { store.duplicate(t.id) } }
         else { Button(t.archived == true ? "取消归档" : "归档") { store.mutate(t.id) { $0.archived = t.archived != true } }; Button("保存为模板") { store.duplicate(t.id,asTemplate: true) }; Button("复制") { store.duplicate(t.id) } }
         if t.deleted { Button("恢复") { store.restoreTask(t.id) } } else { Button("移入回收站",role: .destructive) { store.mutate(t.id) { $0.deleted = true } } }

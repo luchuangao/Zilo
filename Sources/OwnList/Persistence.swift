@@ -285,6 +285,10 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         guard let changed = TaskPlacement.changes(tasks,source: source,target: target,position: position) else { return false }
         return savePlacement(tasks: changed,lists: [])
     }
+    @discardableResult func promoteTask(_ id: UUID) -> Bool {
+        guard let changed = TaskPlacement.promotedChanges(tasks,source: id) else { return false }
+        return savePlacement(tasks: changed,lists: [])
+    }
     @discardableResult func placeList(_ source: UUID,relativeTo target: UUID? = nil,after: Bool = false,folder: String? = nil) -> Bool {
         guard let changed = TaskPlacement.listChanges(lists,source: source,target: target,after: after,folder: folder) else { return false }
         return savePlacement(tasks: [],lists: changed)

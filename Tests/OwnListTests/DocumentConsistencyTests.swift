@@ -68,6 +68,19 @@ final class DocumentConsistencyTests: XCTestCase {
         feedback.end(session: 20)
         XCTAssertNil(feedback.state)
     }
+    @MainActor func testTopLevelDropFeedbackClearsAfterLeavingTarget() {
+        let feedback = TaskDragFeedback(), first = UUID(), second = UUID()
+        feedback.begin(session: 21,payload: first.uuidString)
+        feedback.hoverTopLevel(after: second)
+        XCTAssertEqual(feedback.state?.topLevelTarget,second)
+        feedback.hover(target: second,position: .child)
+        XCTAssertNil(feedback.state?.topLevelTarget)
+        feedback.hoverTopLevel(after: second)
+        feedback.exitTopLevel(after: second)
+        XCTAssertNil(feedback.state?.topLevelTarget)
+        feedback.end(session: 21)
+        XCTAssertNil(feedback.state)
+    }
     @MainActor func testListDropMarkerClearsWhenDragEndsOutsideItsRow() {
         let feedback = TaskDragFeedback(), first = UUID(), second = UUID()
         feedback.begin(session: 30,payload: "zilo-list:" + first.uuidString)
@@ -283,6 +296,39 @@ final class DocumentConsistencyTests: XCTestCase {
         XCTAssertEqual(store.tasks.first { $0.id == nested }?.parentID,child)
         XCTAssertTrue(store.moveTaskTree(parent,to:first.id))
         XCTAssertNil(store.tasks.first { $0.id == parent }?.parentID)
+    }
+    @MainActor func testPromotedSubtaskImmediatelyBecomesSeparateVisibleRoot() throws {
+        let store = Store(persistence: Persistence(inMemory: true))
+        let list = TaskList(name: "工作"); store.save(list)
+        let parent = try XCTUnwrap(store.add("新任务",listID: list.id))
+        let child = try XCTUnwrap(store.add("测试",listID: list.id,parentID: parent))
+        let grandchild = try XCTUnwrap(store.add("检查",listID: list.id,parentID: child))
+        let due = Date(timeIntervalSince1970: 1_800_000_000)
+        store.mutate(child) { $0.due = due; $0.notes = "保持内容" }
+
+        XCTAssertTrue(store.promoteTask(child))
+        let roots = store.tasks.filter { !$0.deleted && $0.listID == list.id && $0.parentID == nil }
+            .sorted { $0.order < $1.order }
+        XCTAssertEqual(roots.map(\.id),[parent,child])
+        XCTAssertEqual(roots.flatMap { TaskHierarchy.rows(root: $0,tasks: store.tasks,collapsed: []) }.map(\.depth),[0,0,1])
+        XCTAssertEqual(store.tasks.first { $0.id == grandchild }?.parentID,child)
+        XCTAssertEqual(store.tasks.first { $0.id == child }?.due,due)
+        XCTAssertEqual(store.tasks.first { $0.id == child }?.notes,"保持内容")
+        store.undo()
+        XCTAssertEqual(store.tasks.first { $0.id == child }?.parentID,parent)
+        store.redo()
+        XCTAssertNil(store.tasks.first { $0.id == child }?.parentID)
+        XCTAssertFalse(store.promoteTask(child),"A top-level task cannot be promoted again")
+    }
+    @MainActor func testPromotingUndatedChildKeepsItInToday() throws {
+        let store = Store(persistence: Persistence(inMemory: true))
+        let parent = try XCTUnwrap(store.add("父任务",defaultDue: Calendar.current.startOfDay(for: Date())))
+        let child = try XCTUnwrap(store.add("未设置日期的子任务",parentID: parent))
+        XCTAssertNil(store.tasks.first { $0.id == child }?.due)
+        XCTAssertTrue(store.promoteTask(child))
+        let promoted = try XCTUnwrap(store.tasks.first { $0.id == child })
+        XCTAssertNil(promoted.parentID)
+        XCTAssertTrue(Calendar.current.isDateInToday(try XCTUnwrap(promoted.due)))
     }
     func testTaskDragBeforeAfterAndImportedCycle() throws {
         var a = TaskItem(), b = TaskItem(), c = TaskItem(); a.order = 0; b.order = 1; c.order = 2

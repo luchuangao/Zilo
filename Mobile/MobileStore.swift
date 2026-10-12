@@ -157,6 +157,11 @@ enum Capability {
             try persistence.transaction { for item in changes { try persistence.save(item) } }; reload()
         } catch { self.error = error.localizedDescription }
     }
+    @discardableResult func promoteTask(_ id: UUID) -> Bool {
+        guard let changes = TaskPlacement.promotedChanges(tasks,source: id) else { return false }
+        do { try persistence.transaction { for item in changes { try persistence.save(item) } }; reload(); return true }
+        catch { self.error = error.localizedDescription; return false }
+    }
     func log(_ title: String,_ detail: String,owner: UUID? = nil) {
         if let last = activity.first,last.title == title,last.detail == detail,last.owner == owner,Date().timeIntervalSince(last.date) < 60 { return }
         activity.insert(ActivityEntry(title: title,detail: detail,owner: owner),at: 0); activity = Array(activity.prefix(200))

@@ -221,6 +221,28 @@ enum TaskHierarchy {
 /// Ordered tree moves. All descendants retain their content, dates and completion state.
 enum TaskPlacement {
     enum Position { case before, child, after }
+    /// Place a subtask after its outermost parent so it becomes a visible root.
+    static func promotedChanges(_ tasks: [TaskItem],source: UUID) -> [TaskItem]? {
+        guard let moved = tasks.first(where: { $0.id == source && !$0.deleted }), moved.parentID != nil else { return nil }
+        var ancestor = moved
+        var visited: Set<UUID> = [source]
+        var inheritedSchedule: TaskItem?
+        while let parentID = ancestor.parentID {
+            guard visited.insert(parentID).inserted,
+                  let parent = tasks.first(where: { $0.id == parentID && !$0.deleted }) else { return nil }
+            if inheritedSchedule == nil && parent.due != nil { inheritedSchedule = parent }
+            ancestor = parent
+        }
+        guard var changed = changes(tasks,source: source,target: ancestor.id,position: .after) else { return nil }
+        // An undated child was visible inside a dated parent (for example in Today).
+        // Keep it visible after the move without altering a date the child already has.
+        if moved.due == nil,let inheritedSchedule,
+           let index = changed.firstIndex(where: { $0.id == source }) {
+            changed[index].due = inheritedSchedule.due
+            changed[index].allDay = inheritedSchedule.allDay
+        }
+        return changed
+    }
     static func changes(_ tasks: [TaskItem],source: UUID,target: UUID,position: Position) -> [TaskItem]? {
         guard source != target, var moved = tasks.first(where: { $0.id == source }), let destination = tasks.first(where: { $0.id == target }),
               !moved.deleted, !destination.deleted, moved.archived != true, destination.archived != true,

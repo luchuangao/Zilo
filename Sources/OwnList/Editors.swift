@@ -386,6 +386,9 @@ struct TaskDetailView: View {
         if task.editingMode == .richText { Button("字体设置") { document.editor?.window?.makeFirstResponder(document.editor); NSFontManager.shared.orderFrontFontPanel(nil) } }
         Divider()
         Button("添加子任务",systemImage: "arrow.turn.down.right") { beginEntry("child") }
+        if task.parentID != nil {
+            Button("移为顶层任务",systemImage: "arrow.up.left") { _ = store.promoteTask(task.id) }
+        }
         Button("添加检查项",systemImage: "checklist") { beginEntry("check") }
         Button(task.starred ? "取消收藏" : "收藏任务",systemImage: "star") { store.mutate(task.id) { $0.starred.toggle() } }
         Button("标签与分组",systemImage: "tag") { showOrganization = true }
@@ -915,6 +918,7 @@ final class TaskNameTextField: NSTextField {
         var payload: String
         var target: UUID? = nil
         var position: TaskPlacement.Position = .before
+        var topLevelTarget: UUID?
         var listTarget: UUID?
         var listAfter = false
     }
@@ -927,12 +931,21 @@ final class TaskNameTextField: NSTextField {
             if state != current { state = current }
             return
         }
-        current.target = target; current.position = position; current.listTarget = nil
+        current.target = target; current.position = position; current.topLevelTarget = nil; current.listTarget = nil
         if state != current { state = current }
     }
     func exit(target: UUID) {
         guard var current = state,current.target == target else { return }
         current.target = nil; state = current
+    }
+    func hoverTopLevel(after target: UUID) {
+        guard var current = state,!current.payload.hasPrefix("zilo-list:") else { return }
+        current.topLevelTarget = target; current.target = nil; current.listTarget = nil
+        if state != current { state = current }
+    }
+    func exitTopLevel(after target: UUID) {
+        guard var current = state,current.topLevelTarget == target else { return }
+        current.topLevelTarget = nil; state = current
     }
     func hoverList(target: UUID,after: Bool) {
         guard var current = state else { return }
@@ -941,7 +954,7 @@ final class TaskNameTextField: NSTextField {
             if state != current { state = current }
             return
         }
-        current.listTarget = target; current.listAfter = after; current.target = nil
+        current.listTarget = target; current.listAfter = after; current.target = nil; current.topLevelTarget = nil
         if state != current { state = current }
     }
     func exitList(target: UUID) {
