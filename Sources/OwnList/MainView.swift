@@ -301,7 +301,7 @@ struct MainView: View {
             .overlay {
                 if key.hasPrefix("list:") {
                     TaskDragHandle(payload: "zilo-list:" + key.dropFirst(5),visible: false,onBegin: {},
-                        onClick: { selection = key; sidebarFocused = true },accessibilityName: "拖动清单“" + text + "”")
+                        onClick: { selection = key; sidebarFocused = true },accessibilityName: "拖动清单“" + text + "”",usesDragCursor: false)
                         .frame(maxWidth: .infinity,maxHeight: .infinity)
                         .help("拖动调整清单顺序或文件夹")
                 }
@@ -410,9 +410,16 @@ struct TaskWorkspace: View {
                 }
                 let completed = visible.filter(\.completed)
                 if (showCompleted || isTrash) && !completed.isEmpty {
-                    Button { completedExpanded.toggle() } label: {
-                        HStack { Image(systemName: completedExpanded ? "chevron.down" : "chevron.right"); Text("已完成").fontWeight(.semibold); Text("\(completed.count)").foregroundStyle(.tertiary); Spacer() }
-                    }.foregroundStyle(ListTheme.secondary).font(.system(size: 12)).buttonStyle(.plain).padding(.vertical,18).padding(.leading,12).accessibilityLabel(completedExpanded ? "收起已完成任务" : "展开已完成任务")
+                    Button { finishRenaming(); completedExpanded.toggle() } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: completedExpanded ? "chevron.down" : "chevron.right")
+                                .font(.system(size: 11,weight: .medium)).frame(width: 24,height: 28)
+                            Text("已完成").fontWeight(.semibold)
+                            Text("\(completed.count)").foregroundStyle(.tertiary)
+                            Spacer(minLength: 0)
+                        }.padding(.horizontal,8).frame(maxWidth: .infinity,minHeight: 48).contentShape(Rectangle())
+                    }.foregroundStyle(ListTheme.secondary).font(.system(size: 12)).buttonStyle(.plain).quietHover()
+                        .accessibilityLabel(completedExpanded ? "收起已完成任务" : "展开已完成任务")
                     if completedExpanded { ForEach(completed) { hierarchyRows($0) } }
                 }
             }.padding(.trailing,12).padding(.top,8).padding(.bottom,20)

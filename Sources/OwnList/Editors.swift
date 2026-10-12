@@ -1015,6 +1015,7 @@ struct TaskDragHandle: NSViewRepresentable {
     var onDoubleClick: (() -> Void)? = nil
     var accessibilityName = "拖动任务"
     var excludedTitleHeight: CGFloat? = nil
+    var usesDragCursor = true
     func makeNSView(context: Context) -> TaskDragHandleView {
         let view = TaskDragHandleView(); view.title = ""; view.isBordered = false
         view.target = view; view.action = #selector(TaskDragHandleView.activate)
@@ -1024,6 +1025,10 @@ struct TaskDragHandle: NSViewRepresentable {
         view.payload = payload; view.showsGrip = visible; view.onBegin = onBegin; view.onClick = onClick
         view.onDoubleClick = onDoubleClick
         view.excludedTitleHeight = excludedTitleHeight
+        if view.usesDragCursor != usesDragCursor {
+            view.usesDragCursor = usesDragCursor
+            view.window?.invalidateCursorRects(for: view)
+        }
         view.setAccessibilityLabel(accessibilityName); view.needsDisplay = true
     }
 }
@@ -1036,6 +1041,7 @@ final class TaskDragHandleView: NSButton,NSDraggingSource {
     var onClick: (() -> Void)?
     var onDoubleClick: (() -> Void)?
     var excludedTitleHeight: CGFloat?
+    var usesDragCursor = true
     private var mouseDownEvent: NSEvent?
     private var beganDragging = false
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
@@ -1046,6 +1052,7 @@ final class TaskDragHandleView: NSButton,NSDraggingSource {
         return super.hitTest(point)
     }
     override func resetCursorRects() {
+        guard usesDragCursor else { addCursorRect(bounds,cursor: .arrow); return }
         if let height = excludedTitleHeight {
             addCursorRect(NSRect(x: 0,y: 0,width: bounds.width,height: min(10,bounds.height)),cursor: .openHand)
             addCursorRect(NSRect(x: 0,y: 0,width: min(16,bounds.width),height: bounds.height),cursor: .openHand)
