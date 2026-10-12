@@ -912,19 +912,41 @@ final class TaskNameTextField: NSTextField {
     static let shared = TaskDragFeedback()
     struct State: Equatable {
         var session: Int
-        var target: UUID?
+        var payload: String
+        var target: UUID? = nil
         var position: TaskPlacement.Position = .before
+        var listTarget: UUID?
+        var listAfter = false
     }
     @Published private(set) var state: State?
-    func begin(session: Int) { state = State(session: session) }
+    func begin(session: Int,payload: String = "") { state = State(session: session,payload: payload) }
     func hover(target: UUID,position: TaskPlacement.Position) {
-        guard var current = state else { return }
-        current.target = target; current.position = position
+        guard var current = state,!current.payload.hasPrefix("zilo-list:") else { return }
+        if current.payload == target.uuidString {
+            current.target = nil
+            if state != current { state = current }
+            return
+        }
+        current.target = target; current.position = position; current.listTarget = nil
         if state != current { state = current }
     }
     func exit(target: UUID) {
         guard var current = state,current.target == target else { return }
         current.target = nil; state = current
+    }
+    func hoverList(target: UUID,after: Bool) {
+        guard var current = state else { return }
+        if current.payload == "zilo-list:" + target.uuidString {
+            current.listTarget = nil
+            if state != current { state = current }
+            return
+        }
+        current.listTarget = target; current.listAfter = after; current.target = nil
+        if state != current { state = current }
+    }
+    func exitList(target: UUID) {
+        guard var current = state,current.listTarget == target else { return }
+        current.listTarget = nil; state = current
     }
     func end(session: Int) {
         guard state?.session == session else { return }
@@ -937,11 +959,14 @@ struct TaskDragHandle: NSViewRepresentable {
     var payload: String
     var visible: Bool
     var onBegin: () -> Void
+    var onClick: (() -> Void)? = nil
+    var accessibilityName = "拖动任务"
     func makeNSView(context: Context) -> TaskDragHandleView {
-        let view = TaskDragHandleView(); view.title = ""; view.isBordered = false; view.setAccessibilityLabel("拖动任务"); return view
+        let view = TaskDragHandleView(); view.title = ""; view.isBordered = false; return view
     }
     func updateNSView(_ view: TaskDragHandleView,context: Context) {
-        view.payload = payload; view.showsGrip = visible; view.onBegin = onBegin; view.needsDisplay = true
+        view.payload = payload; view.showsGrip = visible; view.onBegin = onBegin; view.onClick = onClick
+        view.setAccessibilityLabel(accessibilityName); view.needsDisplay = true
     }
 }
 final class TaskDragHandleView: NSButton,NSDraggingSource {
@@ -949,23 +974,37 @@ final class TaskDragHandleView: NSButton,NSDraggingSource {
     var payload = ""
     var showsGrip = false
     var onBegin: (() -> Void)?
+    var onClick: (() -> Void)?
+    private var mouseDownEvent: NSEvent?
+    private var beganDragging = false
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func resetCursorRects() { addCursorRect(bounds,cursor: .openHand) }
     override func draw(_ dirtyRect: NSRect) {
         guard showsGrip,let image = NSImage(systemSymbolName: "line.3.horizontal",accessibilityDescription: "拖动任务") else { return }
-        image.draw(in: NSRect(x: 0,y: (bounds.height - 10) / 2,width: bounds.width,height: 10),from: .zero,operation: .sourceOver,fraction: 0.65)
+        image.draw(in: NSRect(x: (bounds.width - 14) / 2,y: (bounds.height - 12) / 2,width: 14,height: 12),from: .zero,operation: .sourceOver,fraction: 0.65)
     }
     override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow,from: nil)
+        mouseDownEvent = event; beganDragging = false
+    }
+    override func mouseDragged(with event: NSEvent) {
+        guard let down = mouseDownEvent,!beganDragging else { return }
+        let distance = hypot(event.locationInWindow.x - down.locationInWindow.x,event.locationInWindow.y - down.locationInWindow.y)
+        guard distance >= 4 else { return }
+        beganDragging = true; mouseDownEvent = nil
         onBegin?()
+        let point = convert(event.locationInWindow,from: nil)
         let writer = NSPasteboardItem(); writer.setString(payload,forType: .string)
         let item = NSDraggingItem(pasteboardWriter: writer)
         let image = NSImage(systemSymbolName: "line.3.horizontal",accessibilityDescription: nil) ?? NSImage(size: NSSize(width: 12,height: 12))
         item.setDraggingFrame(NSRect(x: point.x - 6,y: point.y - 6,width: 12,height: 12),contents: image)
         beginDraggingSession(with: [item],event: event,source: self)
     }
+    override func mouseUp(with event: NSEvent) {
+        if mouseDownEvent != nil && !beganDragging { onClick?() }
+        mouseDownEvent = nil
+    }
     func draggingSession(_ session: NSDraggingSession,willBeginAt screenPoint: NSPoint) {
-        TaskDragFeedback.shared.begin(session: session.draggingSequenceNumber)
+        TaskDragFeedback.shared.begin(session: session.draggingSequenceNumber,payload: payload)
     }
     func draggingSession(_ session: NSDraggingSession,endedAt screenPoint: NSPoint,operation: NSDragOperation) {
         // AppKit sends this for successful drops, Esc, and drops outside the window.

@@ -14,8 +14,9 @@ struct MainView: View {
     @AppStorage("startupSmartList") private var startupSmartList = "today"
     @State private var didInitialize = false
     @State private var module: Module = .tasks; @State private var selection = "today"; @State private var search = ""; @State private var viewMode = "列表"; @State private var sort = "手动"; @State private var showCompleted = true; @State private var parallel = false
-    @State private var listDropTarget: UUID?; @State private var listDropAfter = false
-    @State private var listOptionsVisible = false; @State private var displayOptionsVisible = false; @State private var showSummaries = true;
+    @ObservedObject private var dragFeedback = TaskDragFeedback.shared
+    @State private var listOptionsVisible = false; @State private var displayOptionsVisible = false
+    @AppStorage("showTaskSummaries") private var showSummaries = false
     @State private var advancedSearch = false
     @State private var searchCriteria = TaskSearchCriteria()
     @State private var searchAll = true
@@ -286,11 +287,13 @@ struct MainView: View {
     func sidebarChoice(_ text: String,_ icon: String,_ key: String,color: Color? = nil,count: Int = 0) -> some View {
         Button { selection = key; sidebarFocused = true } label: {
             HStack(spacing: 10) {
-                Image(systemName: icon).font(.system(size: 16)).frame(width: 20).foregroundStyle(ListTheme.text)
-                    .onDrag {
-                        guard key.hasPrefix("list:") else { return NSItemProvider() }
-                        return NSItemProvider(object: ("zilo-list:" + key.dropFirst(5)) as NSString)
-                    }.help(key.hasPrefix("list:") ? "拖动调整清单顺序或文件夹" : text)
+                if key.hasPrefix("list:") {
+                    TaskDragHandle(payload: "zilo-list:" + key.dropFirst(5),visible: true,onBegin: {},
+                        onClick: { selection = key; sidebarFocused = true },accessibilityName: "拖动清单“" + text + "”")
+                        .frame(width: 20,height: 28).help("拖动调整清单顺序或文件夹")
+                } else {
+                    Image(systemName: icon).font(.system(size: 16)).frame(width: 20).foregroundStyle(ListTheme.text)
+                }
                 Text(key.hasPrefix("list:") || key.hasPrefix("filter:") || key.hasPrefix("tag:") ? text : ZiloLanguage.text(text)).lineLimit(1)
                 Spacer(minLength: 4)
                 if let color { Circle().fill(color).frame(width: 7,height: 7) }
@@ -304,12 +307,11 @@ struct MainView: View {
         let count = store.tasks.filter { $0.listID == list.id && !$0.deleted && !$0.completed && !$0.isTemplate && $0.archived != true && $0.parentID == nil }.count
         return sidebarChoice(list.name,"line.3.horizontal","list:" + list.id.uuidString,color: list.color == "none" ? nil : list.color.listColor,count: count)
             .contextMenu { Button("编辑清单") { listEditorRequest = ListEditorRequest(existing: list) }; Button("删除清单",role: .destructive) { if store.deleteList(list.id) { selection = "trash" } } }
-            .overlay(alignment: listDropAfter ? .bottom : .top) { if listDropTarget == list.id { ListTheme.accent.frame(height: 2) } }
-            .onDrop(of: [.text],delegate: RecordDropDelegate(updated: { point in listDropTarget = list.id; listDropAfter = point.y > 18 },exited: { if listDropTarget == list.id { listDropTarget = nil } },dropped: { raw,point in
-                listDropTarget = nil
+            .overlay(alignment: dragFeedback.state?.listAfter == true ? .bottom : .top) { if dragFeedback.state?.listTarget == list.id { ListTheme.accent.frame(height: 2).allowsHitTesting(false) } }
+            .onDrop(of: [.text],delegate: RecordDropDelegate(updated: { point in dragFeedback.hoverList(target: list.id,after: point.y > 18) },exited: { dragFeedback.exitList(target: list.id) },dropped: { raw,point in
                 if raw.hasPrefix("zilo-list:"), let id = UUID(uuidString: String(raw.dropFirst(10))) { _ = store.placeList(id,relativeTo: list.id,after: point.y > 18) }
                 else if let id = UUID(uuidString: raw) { _ = store.moveTaskTree(id,to: list.id) }
-            }))
+            },activePayload: { dragFeedback.state?.payload }))
     }
     var selectedListID: UUID? { selection.hasPrefix("list:") ? UUID(uuidString: String(selection.dropFirst(5))) : nil }
     var title: String { switch selection { case "today": return ZiloLanguage.text("今天"); case "tomorrow": return ZiloLanguage.text("明天"); case "week": return ZiloLanguage.text("最近 7 天"); case "inbox": return ZiloLanguage.text("收集箱"); case "all": return ZiloLanguage.text("全部任务"); case "completed": return ZiloLanguage.text("已完成"); case "archived": return ZiloLanguage.text("归档任务"); case "trash": return ZiloLanguage.text("回收站"); case "starred": return ZiloLanguage.text("收藏"); case "templates": return ZiloLanguage.text("任务模板"); default: if let id = selectedListID { return store.lists.first { $0.id == id }?.name ?? "清单" }; if selection.hasPrefix("tag:") { return "#" + selection.dropFirst(4) }; return store.filters.first { "filter:" + $0.id.uuidString == selection }?.name ?? "任务" } }
@@ -334,7 +336,7 @@ struct MainView: View {
 struct TaskWorkspace: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage("accent") private var applicationTheme = "blue"
-    @EnvironmentObject var store: Store; var tasks: [TaskItem]; var viewMode: String; var showCompleted: Bool; var listID: UUID?; var isTrash: Bool; var isTemplates: Bool; var sort: String; var creationContext = "all"; var showSummaries = true; var onManualSort: (() -> Void)? = nil
+    @EnvironmentObject var store: Store; var tasks: [TaskItem]; var viewMode: String; var showCompleted: Bool; var listID: UUID?; var isTrash: Bool; var isTemplates: Bool; var sort: String; var creationContext = "all"; var showSummaries = false; var onManualSort: (() -> Void)? = nil
     @State private var countdownsExpanded = true
     @State private var countdownEditor: Countdown?
     @AppStorage("showCountdownsToday") private var showCountdownsToday = true
@@ -409,7 +411,10 @@ struct TaskWorkspace: View {
                 }
             }.padding(.trailing,12).padding(.top,8).padding(.bottom,20)
         } }
-    }.frame(maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading).onAppear { completedExpanded = creationContext == "completed" || isTrash } }
+    }.frame(maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
+        .onAppear { completedExpanded = creationContext == "completed" || isTrash }
+        .onChange(of: store.selectedTask) { _,id in if let id { collapsedTasks.remove(id) } }
+    }
     func sectionRows(_ section: String) -> some View {
         ForEach(visible.filter { !$0.completed && $0.section == section }) { hierarchyRows($0) }
     }
@@ -439,7 +444,7 @@ struct TaskWorkspace: View {
     func taskTitle(_ task: TaskItem) -> some View {
         TaskNameField(title: task.title,completed: task.completed,fontSize: taskFontSize,
             requestFocus: editingTitle == task.id,
-            onBegin: { store.selectedTask = task.id; editingTitle = task.id },
+            onBegin: { store.selectedTask = task.id; collapsedTasks.remove(task.id); editingTitle = task.id },
             onEnd: { value in
                 if editingTitle == task.id { editingTitle = nil }
                 if let value, !value.isEmpty, store.tasks.first(where: { $0.id == task.id })?.title != value {
@@ -469,7 +474,7 @@ struct TaskWorkspace: View {
     }.padding(.vertical,10).padding(.leading,16).padding(.trailing,4).background { RoundedRectangle(cornerRadius: 8).fill(store.selectedTask == t.id ? ListTheme.selection : hoveredTaskHandle == t.id ? ListTheme.hover : .clear).padding(.leading,12) }.background { TaskRowHover { hoveredTaskHandle = $0 ? t.id : (hoveredTaskHandle == t.id ? nil : hoveredTaskHandle) } }.overlay(alignment: .bottom) { if store.selectedTask != t.id { ListTheme.separator.frame(height: 0.5).padding(.leading,57) } }.contentShape(Rectangle()).background { GeometryReader { proxy in Color.clear.onAppear { rowHeights[t.id] = proxy.size.height }.onChange(of: proxy.size.height) { _,height in rowHeights[t.id] = height } } }
         .overlay(alignment: .topLeading) {
             TaskDragHandle(payload: t.id.uuidString,visible: hoveredTaskHandle == t.id,onBegin: finishRenaming)
-                .frame(width: 12,height: 20).offset(x: 2,y: 10)
+                .frame(width: 16,height: 24).offset(x: 0,y: 8)
                 .help("拖动：上／下方排序，中间放为子任务").accessibilityLabel("拖动任务“" + t.title + "”")
         }
         .overlay {
@@ -484,7 +489,7 @@ struct TaskWorkspace: View {
             guard !isTrash, let id = UUID(uuidString: raw) else { return }
             finishRenaming()
             if store.placeTask(id,relativeTo: t.id,position: dropPosition(point,task: t)) { collapsedTasks.remove(t.id); store.selectedTask = id; onManualSort?() }
-        })).contextMenu {
+        },activePayload: { dragFeedback.state?.payload })).contextMenu {
         Button("打开详情") { store.selectedTask = t.id }; Button("修改名称") { startRenaming(t) }; Button(batchMode ? "结束批量编辑" : "批量编辑") { batchMode.toggle(); multi = [] }; Button(t.starred ? "取消收藏" : "收藏") { store.mutate(t.id) { $0.starred.toggle() } }
         if t.isTemplate { Button("从模板创建任务") { store.duplicate(t.id) } }
         else { Button(t.archived == true ? "取消归档" : "归档") { store.mutate(t.id) { $0.archived = t.archived != true } }; Button("保存为模板") { store.duplicate(t.id,asTemplate: true) }; Button("复制") { store.duplicate(t.id) } }
@@ -504,12 +509,17 @@ private struct RecordDropDelegate: DropDelegate {
     var updated: (CGPoint) -> Void
     var exited: () -> Void
     var dropped: (String,CGPoint) -> Void
+    var activePayload: () -> String? = { nil }
     func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.text]) }
     func dropEntered(info: DropInfo) { updated(info.location) }
     func dropUpdated(info: DropInfo) -> DropProposal? { updated(info.location); return DropProposal(operation: .move) }
     func dropExited(info: DropInfo) { exited() }
     func performDrop(info: DropInfo) -> Bool {
         let location = info.location
+        if let raw = activePayload(),!raw.isEmpty {
+            exited(); dropped(raw,location)
+            return true
+        }
         guard let provider = info.itemProviders(for: [.text]).first, provider.canLoadObject(ofClass: NSString.self) else { exited(); return false }
         provider.loadObject(ofClass: NSString.self) { object,_ in
             guard let raw = object as? String else { return }

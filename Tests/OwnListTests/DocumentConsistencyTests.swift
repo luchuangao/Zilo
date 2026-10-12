@@ -68,6 +68,21 @@ final class DocumentConsistencyTests: XCTestCase {
         feedback.end(session: 20)
         XCTAssertNil(feedback.state)
     }
+    @MainActor func testListDropMarkerClearsWhenDragEndsOutsideItsRow() {
+        let feedback = TaskDragFeedback(), first = UUID(), second = UUID()
+        feedback.begin(session: 30,payload: "zilo-list:" + first.uuidString)
+        feedback.hoverList(target: first,after: true)
+        XCTAssertNil(feedback.state?.listTarget,"A list cannot show an insertion line on itself")
+        feedback.hoverList(target: second,after: true)
+        XCTAssertEqual(feedback.state?.listTarget,second)
+        XCTAssertTrue(feedback.state?.listAfter == true)
+        feedback.hover(target: first,position: .child)
+        XCTAssertNil(feedback.state?.target,"A list drag cannot become a task placement")
+        feedback.end(session: 30)
+        XCTAssertNil(feedback.state,"The list insertion line must vanish when the pointer is released")
+        feedback.hoverList(target: second,after: true)
+        XCTAssertNil(feedback.state,"Late hover callbacks must not restore the insertion line")
+    }
     func testCodeLanguageChangingFencePreservesCodeAndOtherBlocks() throws {
         let source = "前文\r\n```swift\r\nlet value = \"中文🙂\"\r\n\tprint(value)\r\n```\r\n\r\n```mermaid\r\nmindmap\r\n  root\r\n```\r\n\r\n> ~~~python\r\n> print('hello')\r\n> ~~~\r\n"
         let first = try XCTUnwrap(CodeLanguage.replacing(source,index: 0,language: "python"))
