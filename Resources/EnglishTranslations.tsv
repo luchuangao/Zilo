@@ -1,0 +1,710 @@
+操作未完成	Action could not be completed
+好	OK
+任务	Tasks
+日历	Calendar
+专注	Focus
+习惯	Habits
+更多	More
+准备做什么？	What would you like to do?
+日期	Date
+设置日期	Set date
+输入“明天下午 3 点”或 #标签，可以自动识别。	Dates such as “tomorrow at 3 pm” and #tags are recognized automatically.
+添加任务	Add task
+添加子任务	Add subtask
+取消	Cancel
+添加	Add
+搜索任务	Search tasks
+恢复	Restore
+删除	Delete
+完成	Complete
+已完成  %lld	Completed  %lld
+选择清单	Choose list
+通知	Notifications
+结束排序	Done reordering
+调整顺序	Reorder
+设置	Settings
+任务选项	Task options
+恢复 %@	Restore %@
+完成 %@	Complete %@
+打开设置	Open settings
+同步	Sync
+清单	Lists
+编辑清单	Edit list
+新建清单	New list
+过滤器	Filters
+新建过滤器	New filter
+标签	Tags
+同步与通知	Sync & notifications
+清单名称	List name
+文件夹（可选）	Folder (optional)
+清单颜色	List color
+保存	Save
+更多	More
+四象限	Eisenhower Matrix
+倒数纪念日	Countdowns
+统计与回顾	Statistics & review
+让日常更有条理	Bring order to your day
+任务名称	Task name
+子任务名称	Subtask name
+内容	Content
+富文本正文	Rich text
+正文编辑方式	Document editor
+富文本	Rich text
+Markdown 正文	Markdown source
+预览	Preview
+添加附件	Add attachment
+附件	Attachments
+移除任务名中的日期	Remove dates from task names
+移除任务名中的标签	Remove tags from task names
+识别日期和时间	Recognize dates and times
+任务属性	Task properties
+日期与任务属性	Date & task properties
+日期与提醒	Date & reminders
+截止日期	Due date
+全天	All day
+提醒	Reminder
+不提醒	No reminder
+准时	At due time
+提前 10 分钟	10 minutes before
+提前 30 分钟	30 minutes before
+提前 1 天	1 day before
+重复	Repeat
+不重复	Never
+每天	Daily
+工作日	Weekdays
+每周	Weekly
+每月	Monthly
+每年	Yearly
+优先级	Priority
+无	None
+低	Low
+中	Medium
+高	High
+收藏	Favorites
+收集箱	Inbox
+恢复任务	Restore task
+完成任务	Complete task
+收藏任务	Favorite task
+移到回收站	Move to trash
+移动任务	Move task
+移动位置	Move position
+移为顶层任务	Make top-level task
+选择目标任务	Choose destination task
+放置方式	Placement
+放在之前	Place before
+放在之后	Place after
+设为子任务	Make subtask
+今天	Today
+明天	Tomorrow
+所有清单	All lists
+检查项	Checklist
+新建习惯	New habit
+编辑习惯	Edit habit
+删除习惯	Delete habit
+习惯名称	Habit name
+图标	Icon
+重复日	Repeat on
+每日目标 %lld 次	Daily goal: %lld
+打卡 %@	Check in %@
+撤销这一天的打卡	Undo this check-in
+连续 %lld 天 · %lld/%lld	%lld-day streak · %lld/%lld
+关联任务	Linked task
+自由专注	Free focus
+番茄专注	Pomodoro
+番茄计时	Pomodoro timer
+正计时	Stopwatch
+准备开始	Ready to start
+保持专注	Stay focused
+已暂停	Paused
+休息 · 第 %lld 轮	Break · Round %lld
+开始	Start
+暂停	Pause
+继续	Resume
+开始休息	Start break
+结束	Stop
+专注结束	Focus complete
+专注 %lld 分钟	Focus: %lld minutes
+专注记录	Focus history
+查看专注记录	View focus history
+专注设置	Focus settings
+计时方式	Timer mode
+短休息 %lld 分钟	Short break: %lld minutes
+长休息 %lld 分钟	Long break: %lld minutes
+提示音	Sound
+每完成 4 个番茄，进入长休息。计时结束后手动开始下一阶段。切到后台或锁屏后，计时仍会继续。	A long break follows every four Pomodoros. Start each next phase manually. Timing continues in the background or when the screen is locked.
+添加纪念日	Add countdown
+编辑纪念日	Edit countdown
+名称	Name
+类型	Type
+类别	Category
+每年重复	Repeat annually
+置顶	Pin
+提前提醒	Remind me
+当天	On the day
+提前 3 天	3 days before
+提前 7 天	7 days before
+时间	Time
+这一天没有任务	No tasks for this day
+上一月	Previous month
+下一月	Next month
+智能清单	Smart lists
+功能模块	Modules
+外观	Appearance
+界面外观	Appearance mode
+跟随系统	Follow system
+浅色	Light
+深色	Dark
+提醒与通知	Reminders & notifications
+任务提醒	Task reminders
+习惯提醒	Habit reminders
+纪念日提醒	Countdown reminders
+数据与备份	Data & backups
+导出完整备份	Export full backup
+导入 Zilo 备份	Import Zilo backup
+支持 Mac 和 iPhone 的 .ownlist.json 备份。导入会按记录 ID 合并，保留其他已有记录。	Supports .ownlist.json backups from Mac and iPhone. Import merges records by ID and keeps other existing records.
+关于	About
+版本	Version
+Zilo iPhone 版 · 原生 SwiftUI	Zilo for iPhone · Native SwiftUI
+数据保存在本机和你自己的 iCloud 中。	Data is stored on this device and in your own iCloud account.
+iCloud 同步	iCloud sync
+检查同步	Check sync
+更改同步开关后，请重新打开 Zilo。使用同一个 Apple 账户，可以同步 Mac 与 iPhone 的任务、习惯、专注、纪念日和附件。	Reopen Zilo after changing sync. Use the same Apple Account to sync tasks, habits, focus, countdowns and attachments between Mac and iPhone.
+合并备份	Merge backup
+备份中同一个 ID 的记录会覆盖本机对应记录。其余本机记录会保留。	Records with matching IDs replace their local versions. Other local records are kept.
+导入	Import
+允许系统通知	Allow notifications
+打开 iPhone 通知设置	Open iPhone notification settings
+iOS 最多保留 64 个待发送提醒。Zilo 优先安排最近的提醒，并在打开应用或数据变化时更新。	iOS allows up to 64 pending reminders. Zilo schedules the nearest ones first and updates them when the app opens or data changes.
+全部已读	Mark all as read
+活动	Activity
+关闭模块只会隐藏入口，已有数据会保留。	Hiding a module keeps all its existing data.
+过滤器名称	Filter name
+包含文字	Contains text
+范围	Range
+不限	Any
+今天及以前	Today and earlier
+未来 7 天	Next 7 days
+未来 30 天	Next 30 days
+仅收藏	Favorites only
+标签，以逗号分隔	Tags, separated by commas
+清单完成情况	Tasks completed by list
+每天完成任务	Tasks completed per day
+7 天	7 days
+30 天	30 days
+90 天	90 days
+%lld 分钟	%lld min
+%lld 秒	%lld sec
+%lld 项	%lld items
+%lld 月	Month %lld
+%@ · %@ %lld 天	%@ · %@ %lld days
+%@，%@ %lld 天	%@, %@ %lld days
+%@ · %lld 条任务 · %lld 个清单 · %lld 条重复	%@ · %lld tasks · %lld lists · %lld recurring tasks
+MIT 开源许可	MIT license
+Markdown 文件	Markdown file
+Markdown 文件（.md）	Markdown file (.md)
+Markdown 预览	Markdown preview
+PDF 文档（.pdf）	PDF document (.pdf)
+Word 文档（.docx）	Word document (.docx)
+Zilo 菜单	Zilo menu
+一	M
+二	T
+三	W
+四	T
+五	F
+六	S
+日	S
+上传附件	Upload attachment
+上移	Move up
+下移	Move down
+不重要不紧急	Not important, not urgent
+不重要但紧急	Not important, urgent
+专注时长：%lld 分钟	Focus duration: %lld minutes
+中优先级	Medium priority
+低优先级	Low priority
+高优先级	High priority
+无优先级	No priority
+习惯设置	Habit settings
+习惯详情	Habit details
+习惯选项	Habit options
+今天及逾期	Today and overdue
+今天的任务	Today's tasks
+从模板创建任务	Create task from template
+任务、习惯、专注和纪念日提醒\n会显示在这里	Task, habit, focus and countdown reminders\nappear here
+任务、文档与专注，安排每一天。	Tasks, documents and focus for every day.
+任务、清单、习惯、专注记录、纪念日和附件通过 iCloud 自动同步。	Tasks, lists, habits, focus history, countdowns and attachments sync automatically through iCloud.
+任务分组	Task sections
+任务动态	Task activity
+任务名称，支持日期和 #标签	Task name, with dates and #tags
+任务字号	Task font size
+任务排序	Sort tasks
+任务更多操作	More task actions
+任务更新、打卡和同步记录\n会显示在这里	Task updates, check-ins and sync history\nappear here
+任务标题	Task title
+任务模板	Task templates
+任务类型	Task type
+任务详情	Task details
+任意	Any
+例如：待办，进行中，完成	For example: To do, In progress, Done
+便签内容	Sticky note text
+保存为模板	Save as template
+修改历史	Change history
+修改名称	Rename
+全部任务	All tasks
+所有	All
+关闭	Close
+关闭右侧预览	Close preview
+关闭子任务输入	Close subtask input
+关闭搜索	Close search
+关闭检查项输入	Close checklist input
+其他任务视图	Other task views
+其余 %lld 条任务也将导入	%lld other tasks will also be imported
+农历 %lld 月	Lunar month %lld
+分类	Category
+分组	Sections
+分钟	min
+创建	Create
+创建于 %@	Created %@
+创建副本	Duplicate
+删除清单	Delete list
+删除记录	Delete record
+到时提醒	At due time
+刷新	Refresh
+剩余 %lld 次	%lld remaining
+单击定位光标，回车保存，Esc 取消	Click to edit, Return to save, Esc to cancel
+发送测试通知	Send test notification
+取消完成	Mark incomplete
+取消完成检查项	Uncheck item
+取消归档	Unarchive
+取消收藏	Remove favorite
+取消置顶	Unpin
+右侧 Markdown 预览	Markdown preview
+同步设置	Sync settings
+启动时打开	Open on launch
+周一	Monday
+周二	Tuesday
+周三	Wednesday
+周四	Thursday
+周五	Friday
+周六	Saturday
+周日	Sunday
+四象限显示设置	Matrix display settings
+图片	Image
+复制	Copy
+复制链接	Copy link
+子任务	Subtasks
+字体设置	Font settings
+完成今日计划	Complete today's plan
+完成后计算下一次	Calculate next date after completion
+完成子任务	Complete subtask
+完成检查项	Check item
+实时预览	Live preview
+导入 / 恢复	Import / restore
+导入 Apple 提醒事项	Import Apple Reminders
+导入预览	Import preview
+导出备份	Export backup
+导出文档	Export document
+小窗口	Mini window
+就是今天	Today is the day
+展开全部分组	Expand all sections
+展开子任务	Expand subtasks
+展开已完成任务	Show completed tasks
+展开或收起子任务	Expand or collapse subtasks
+工作	Work
+已删除的习惯	Deleted habits
+已删除的清单	Deleted lists
+已删除的纪念日	Deleted countdowns
+已完成	Completed
+已选 %lld 项	%lld selected
+并列日历	Side-by-side calendar
+开启系统通知	Enable notifications
+开始一次专注，或补记已经完成的专注。	Start a focus session or add a completed one.
+开始专注	Start focus
+开源项目	Source code
+归档	Archive
+归档任务	Archived tasks
+当前快捷键：%@	Current shortcut: %@
+当前数据保存在本机，可在设置中启用 iCloud 同步。	Data is stored locally. Enable iCloud sync in Settings.
+录制快捷键	Record shortcut
+快速添加任务	Quick add task
+思维导图	Mind map
+恢复习惯	Restore habit
+恢复备份并替换当前数据	Restore backup and replace current data
+恢复清单	Restore list
+恢复清单及任务	Restore list and tasks
+恢复这个字段	Restore this field
+恢复默认	Reset to default
+截止	Due
+截止范围	Due date range
+所属清单	List
+打卡	Check in
+打卡日期	Check-in date
+打印	Print
+打开	Open
+打开任务	Open task
+打开便签	Open sticky note
+打开备份文件夹	Open backup folder
+打开详情	Open details
+批量编辑	Bulk edit
+拖动清单到此文件夹	Drop list into this folder
+拖动清单到这里可移出文件夹	Drop here to move out of folder
+拖动：上／下方排序，中间放为子任务	Drag above or below to reorder; drop in the middle to create a subtask
+按下组合键，Esc 取消	Press a key combination; Esc to cancel
+排序	Sort
+提前 %lld 分钟	%lld minutes before
+提前 1 小时	1 hour before
+提前 15 分钟	15 minutes before
+提前 5 分钟	5 minutes before
+提醒时间	Reminder time
+提醒时间 %lld:00	Reminder at %lld:00
+插入	Insert
+插入内容	Insert content
+插入图片	Insert image
+插入思维导图	Insert mind map
+插入或编辑思维导图	Insert or edit mind map
+插入链接	Insert link
+搜索任务、描述、标签	Search tasks, notes and tags
+撤销	Undo
+收起全部分组	Collapse all sections
+收起子任务	Collapse subtasks
+收起已完成任务	Hide completed tasks
+放为子任务	Make subtask
+数据目录：%@	Data folder: %@
+文件夹	Folder
+文件夹，可输入新名称	Folder, or enter a new name
+新建倒数纪念日	New countdown
+日期、重复与提醒	Date, repeat & reminders
+时长 %lld 分钟	Duration: %lld minutes
+时间轴缩放	Timeline zoom
+明天下午3点 写周报 #工作 !3	Tomorrow at 3 pm write weekly report #work !3
+星期	Weekday
+显示已完成	Show completed
+显示或隐藏清单导航	Show or hide lists
+显示文字（可选）	Display text (optional)
+显示清单和日期	Show list and date
+普通任务	Task
+最后一个	Last
+最近 35 天	Last 35 days
+未来 30 天及逾期	Next 30 days and overdue
+未来 7 天及逾期	Next 7 days and overdue
+未设置提醒	No reminder set
+本周	This week
+条件同时满足时显示任务	Show tasks matching all conditions
+来一起养成习惯吧	Build a habit together
+查看习惯	View habits
+查看纪念日	View countdowns
+标签与分组	Tags & sections
+格式工具栏	Formatting toolbar
+桌面便签	Sticky note
+检查	Check
+检查项内容	Checklist item
+检查项操作	Checklist actions
+概览	Overview
+每 %lld 个周期	Every %lld periods
+每周开始于	Week starts on
+每天一点进步，记录每一次坚持。	Make a little progress every day.
+每完成 4 个番茄后进入长休息。计时结束后手动开始下一阶段。	A long break follows every four Pomodoros. Start the next phase manually.
+每日专注时长	Daily focus time
+每日完成任务	Daily completed tasks
+每月第 %lld 天（负数从月末计）	Day %lld of each month (negative counts from the end)
+每次目标 %lld	Goal per session: %lld
+每行一个主题，缩进表示子主题。Tab 增加层级，Shift + Tab 减少层级。	One topic per line; indent for subtopics. Tab to indent, Shift + Tab to outdent.
+没有任务	No tasks
+没有已删除的习惯	No deleted habits
+没有已删除的纪念日	No deleted countdowns
+没有活动	No activity
+没有通知	No notifications
+添加到系统日历	Add to system calendar
+添加子任务，回车保存	Add subtask, Return to save
+添加检查项	Add checklist item
+添加检查项，回车继续	Add checklist item, Return to continue
+添加订阅	Add subscription
+清单完成分布	Completed tasks by list
+清单选项	List options
+清单预览，%@，%@，%@视图	List preview, %@, %@, %@ view
+点击日期查看或补记；灰色日期尚未打卡。	Choose a date to view or add a check-in. Gray dates have no check-in.
+版本 %@（%@）	Version %@ (%@)
+留空使用链接地址	Leave blank to use the URL
+确认导入	Confirm import
+离线生成 · 支持多级主题 · 随文档导出	Created offline · Nested topics · Included in exports
+移入回收站	Move to trash
+移到象限	Move to quadrant
+移动	Move
+移除	Remove
+移除子任务	Remove subtask
+移除检查项	Remove checklist item
+移除附件	Remove attachment
+立即备份	Back up now
+第 %lld 个	Number %lld
+第 %lld 天	Day %lld
+第几个	Occurrence
+系统通知设置	System notification settings
+纪念日	Anniversary
+倒数日	Countdown
+节日	Holiday
+纪念日选项	Countdown options
+结束批量编辑	Done bulk editing
+结束时间	End time
+继续添加检查项	Continue adding checklist items
+编辑	Edit
+编辑倒数纪念日	Edit countdown
+编辑思维导图	Edit mind map
+自定义过滤器	Custom filters
+自定义颜色	Custom color
+补记专注	Add focus record
+视图	View
+视图类型	View type
+订阅名称	Subscription name
+记录值得期待的日子	Keep track of special days
+记录纪念日、倒数日和节日，设置提醒。	Track anniversaries, countdowns and holidays with reminders.
+设置开始时间	Set start time
+设置结束日期	Set end date
+识别日期、#标签、!1 至 !3 优先级	Recognizes dates, #tags and !1 to !3 priorities
+请输入有效的网址，例如 https://example.com	Enter a valid URL, such as https://example.com
+课程	Courses
+辅助时区	Additional time zone
+输入 Markdown 源码…	Write Markdown…
+输入内容，支持 Markdown 快捷语法…	Write here, with Markdown shortcuts…
+返回父任务	Back to parent task
+还没有专注记录	No focus records yet
+连接系统日历	Connect system calendar
+连续 %lld 次	%lld-session streak
+退出	Quit
+选择	Choose
+选择一个习惯，查看进度并补记打卡。	Select a habit to view progress and add check-ins.
+选择已有文件夹	Choose existing folder
+通知已开启	Notifications enabled
+重做	Redo
+重命名文件夹	Rename folder
+重复至	Repeat until
+重要不紧急	Important, not urgent
+重要且紧急	Important and urgent
+链接地址	URL
+链接显示文字	Link text
+限制重复次数	Limit repeat count
+默认任务视图	Default task view
+默认优先级	Default priority
+默认合并；替换会把当前备份中不存在的记录移入回收站。	Merge is the default. Replace moves records absent from the backup to trash.
+默认日期	Default date
+通知与活动	Notifications & activity
+Zilo iPhone 版 · 原生 SwiftUI\n数据保存在本机和你自己的 iCloud 中。	Zilo for iPhone · Native SwiftUI\nData stays on this device and in your own iCloud account.
+ICS 日历订阅	ICS calendar subscription
+Markdown 预览正文	Markdown preview content
+Zilo 测试通知	Zilo test notification
+上一周	Previous week
+下一周	Next week
+下划线	Underline
+专注分钟	Focus minutes
+专注完成	Focus complete
+专注结束提示音	Focus completion sound
+专注结束通知	Focus completion notification
+主题	Theme
+主题立即应用到导航栏、侧栏、选中背景及控件。清单保留各自的颜色。	Themes apply immediately to navigation, sidebars, selection backgrounds and controls. Lists keep their own colors.
+习惯打卡	Habit check-in
+习惯达标	Habit goal reached
+仅用于新建任务；输入的日期、优先级或当前清单的日期会优先采用。已有任务不受影响。	Defaults apply to new tasks. Dates and priorities you enter take precedence. Existing tasks are unaffected.
+今天也从容一点	Make room for today
+今天要做	Today's plan
+今日专注	Today's focus
+今日专注时长	Today's focus time
+今日便签	Today's note
+今日番茄	Today's Pomodoros
+代码	Code
+代码块	Code block
+代码语言	Code language
+任务日期使用 Mac 的本地时区。日历时间轴可在显示选项中选择辅助时区。	Tasks use the Mac's local time zone. Choose an additional time zone in calendar display options.
+任务暂不可用	Task unavailable
+任务更新、打卡和同步记录会显示在这里。	Task updates, check-ins and sync history appear here.
+任务正文	Task notes
+休息	Break
+休息结束	Break complete
+使用番茄计时与计时器保持专注。	Stay focused with Pomodoro and stopwatch timers.
+保存任务名称	Save task name
+做得很好，休息一下吧。	Well done. Take a break.
+全天任务	All-day tasks
+全局快速添加	Global quick add
+关联与导入	Integrations & import
+关闭任务或习惯提醒会取消对应的待发送通知；任务里的提醒时间会保留。	Turning off reminders cancels pending notifications. Reminder times on tasks are kept.
+关闭后隐藏左侧入口，已有任务、习惯和专注记录继续保留。统计可以从左上角 Zilo 菜单打开。	Hiding a module keeps tasks, habits and focus history. Open Statistics from the Zilo menu.
+关闭结束提示音	Mute completion sound
+农历每年	Yearly (lunar calendar)
+准备开始下一次专注。	Ready for your next focus session.
+列表	List
+列表内换行	New line in list
+创建时间	Created
+删除线	Strikethrough
+加粗	Bold
+单张思维导图最多支持 100 个主题、12 层，请拆分后插入。	A mind map supports up to 100 topics and 12 levels. Split larger maps before inserting.
+取消名称修改	Cancel rename
+同步失败	Sync failed
+同步完成后再试。	Try again after sync completes.
+同步暂不可用 · 已保存在本机	Sync unavailable · Saved locally
+同步状态	Sync status
+启用 iCloud 同步	Enable iCloud sync
+周	Week
+回收站	Trash
+回收站为空	Trash is empty
+回车	Return
+在月、周与时间轴中规划任务。	Plan tasks in month, week and timeline views.
+在菜单栏显示 Zilo	Show Zilo in the menu bar
+备份已导出	Backup exported
+备份已恢复，原数据已自动备份	Backup restored. Previous data was backed up automatically.
+夜间	Night
+失败	Failed
+完成任务提示音	Task completion sound
+导出	Export
+将 Markdown 文件内容插入当前正文	Insert a Markdown file into this document
+尚未开启	Not enabled
+展开	Expand
+已保存长期备份	Permanent backup saved
+已允许	Allowed
+年	Year
+开启结束提示音	Enable completion sound
+引用	Quote
+当前构建暂不支持 iCloud 同步；数据已保存在本机。	iCloud sync is unavailable in this build. Data is saved locally.
+待办	To do
+待安排	Unscheduled
+待完成	To complete
+快捷键	Keyboard shortcuts
+快速添加	Quick add
+思维导图只能有一个中心主题，请缩进其余主题。	A mind map needs one central topic. Indent the other topics.
+思维导图（待修正）	Mind map (needs correction)
+总专注时长	Total focus time
+总番茄	Total Pomodoros
+手动	Manual
+把想做的事情记下来，一件一件完成。	Write down what matters and take it one task at a time.
+拖动任务	Drag task
+拖动调整清单顺序或文件夹	Drag to reorder lists or move folders
+按重要性和紧急性安排任务。	Organize tasks by importance and urgency.
+撤销 / 重做	Undo / redo
+支持日期、时区及常用重复规则。	Supports dates, time zones and common repeat rules.
+收起	Collapse
+文档	Documents
+斜体	Italic
+新任务	New task
+新任务默认值	New task defaults
+新建	New
+无颜色	No color
+日期与时间	Date & time
+日程	Agenda
+时间线	Timeline
+显示	Show
+隐藏	Hide
+有内容时显示	Show when not empty
+显示农历	Show lunar dates
+显示周数	Show week numbers
+显示摘要	Show summaries
+显示设置	Display settings
+晴蓝	Clear blue
+智能识别	Smart recognition
+暖黄	Warm yellow
+暮山紫	Lavender
+更多语言	More languages
+更改同步开关后重启应用生效。	Restart the app after changing sync.
+最近 7 天	Next 7 days
+月	Month
+月末	Month end
+有时间的任务	Timed tasks
+未允许	Not allowed
+未知	Unknown
+本地时区	Local time zone
+杏黄	Apricot
+松石	Turquoise
+查看详细内容、安排时间或开始专注	View details, schedule time or start focus
+标题	Title
+桃夭	Peach pink
+模块	Modules
+橙色	Orange
+次	check-ins
+正在检查…	Checking…
+此快捷键无法注册，可能已被其他应用占用，请选择另一组合。	This shortcut may be used by another app. Choose a different combination.
+每周起始日同时应用到月视图与周视图；农历和周数会显示在日历日期中。	The first weekday applies to month and week views. Lunar dates and week numbers appear in the calendar.
+每天一点点，坚持让我们闪闪发光。	Small steps make lasting progress.
+每月指定日	On a day of each month
+每月第 N 个星期	On a weekday of each month
+沉香	Sandalwood
+没有找到任务	No tasks found
+测试通知已发送	Test notification sent
+添加今天的任务，回车创建	Add a task for today, press Return
+添加任务到	Add task to
+添加任务时识别“明天下午 3 点”和 #标签；保留文本时仍会设置对应日期或标签。	Dates such as “tomorrow at 3 pm” and #tags are recognized when adding tasks. Keeping the text still sets the date and tags.
+添加任务至收集箱，回车创建	Add to Inbox, press Return
+添加任务，默认安排在今天	Add task, scheduled for today
+添加分组	Add section
+添加到	Add to
+添加明天的任务，回车创建	Add a task for tomorrow, press Return
+添加模板，回车创建	Add template, press Return
+添加任务至“%@”，回车创建	Add to “%@”, press Return
+添加生日、纪念日，或下一次期待。	Add birthdays, anniversaries or something to look forward to.
+清单很清爽	A fresh start
+灰色	Gray
+点击右下角 +，记录下一件要做的事。	Tap + to add your next task.
+珊瑚	Coral
+留住重要的日子	Remember the days that matter
+番茄	Pomodoro
+登录时启动	Launch at login
+看板	Board
+秘青	Cyan
+移到	Move to
+粉色	Pink
+粗体	Bold
+系统通知尚未允许	Notifications not allowed
+系统通知已允许	Notifications allowed
+系统通知权限	Notification permission
+紫色	Purple
+累计打卡	Total check-ins
+红色	Red
+纯文本	Plain text
+结束专注	End focus
+统计	Statistics
+绿色	Green
+编号列表	Numbered list
+编辑任务与文档	Edit tasks and documents
+缩进 / 减少缩进	Indent / outdent
+自动备份保留最近 30 天；手动备份长期保留。恢复前会显示导入内容。	Automatic backups are kept for 30 days. Manual backups are kept indefinitely. Review the content before restoring.
+自动检测	Auto-detect
+蒹葭	Sage
+蓝色	Blue
+藏蓝	Navy
+行内代码	Inline code
+补记	Add record
+记录每日习惯，查看打卡进度。	Track daily habits and check-in progress.
+记录重要日期，设置倒数和每年重复提醒。	Track important dates, countdowns and yearly reminders.
+试试其他关键词。	Try another search.
+请包含 Command、Option 或 Control 修饰键	Include Command, Option or Control
+请在系统设置中允许 Zilo 通知	Allow Zilo notifications in System Settings
+请输入中心主题。	Enter a central topic.
+课表	Timetable
+调整任务优先级与日期，即可安排到对应象限。	Set task priorities and dates to place them in a quadrant.
+进行中	In progress
+连续达标	Current streak
+退出 Zilo	Quit Zilo
+选择一个任务	Select a task
+选择导出位置。Markdown 文件和配套图片会保存在一个新文件夹中。	Choose a destination. The Markdown document and its images will be saved in a new folder.
+选择要插入正文的图片	Choose an image to insert
+选项	Options
+通用	General
+通知声音	Notification sound
+链接	Link
+链接文字	Link text
+附件正在从 iCloud 下载，请稍后再试。	The attachment is downloading from iCloud. Try again shortly.
+隐藏已完成	Hide completed
+隐藏摘要	Hide summaries
+项目列表	Bullet list
+颜色主题	Color themes
+黄绿色	Lime
+黄色	Yellow
+默认	Default
+默认提醒	Default reminder
+语言	Language
+跟随系统语言	System language
+切换语言后，请重新打开 Zilo。	Reopen Zilo after changing the language.
+英文	English
+中文	Chinese
+已保存在本机	Saved locally
+正在连接 iCloud…	Connecting to iCloud…
+正在同步…	Syncing…
+iCloud 已连接 · 等待数据同步	iCloud connected · Waiting for sync
+同步失败：系统暂未完成同步，将自动重试	Sync incomplete. Zilo will retry automatically.
+还有 %lld 天	%lld days left
+已经 %lld 天	%lld days elapsed
+今日专注 %lld 分钟	Focused %lld minutes today

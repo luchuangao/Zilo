@@ -1,5 +1,7 @@
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 import JavaScriptCore
 import WebKit
 
@@ -25,6 +27,8 @@ final class MarkdownRenderer {
             catch { return "<p class=\"missing-image\">"+Self.escape(error.localizedDescription)+"</p>" }
         }
         context.setObject(mindmap,forKeyedSubscript:"ziloMindmap" as NSString)
+        let labels = ["plain": ZiloLanguage.text("纯文本"), "copy": ZiloLanguage.text("复制"), "preview": ZiloLanguage.text("预览将在这里显示"), "language": ZiloLanguage.text("代码语言")]
+        if let data = try? JSONSerialization.data(withJSONObject: labels,options: [.sortedKeys]),let json = String(data: data,encoding: .utf8) { context.evaluateScript("var ziloUI = " + json + ";") }
         context.evaluateScript(Self.bridge)
     }
     var languages: [String] { lock.lock(); defer { lock.unlock() }; return context.evaluateScript("hljs.listLanguages()")?.toArray() as? [String] ?? [] }
@@ -95,10 +99,10 @@ final class MarkdownRenderer {
           } catch (_) {}
         }
         var language = requested || (highlighted && highlighted.relevance > 1 && highlighted.language) || 'text';
-        var label = ({bash:'Bash',shell:'Shell',swift:'Swift',python:'Python',javascript:'JavaScript',typescript:'TypeScript',json:'JSON',yaml:'YAML',sql:'SQL',xml:'HTML / XML',cpp:'C++',csharp:'C#',go:'Go',rust:'Rust',java:'Java',nginx:'Nginx',text:'纯文本',plaintext:'纯文本'})[language] || language;
+        var label = ({bash:'Bash',shell:'Shell',swift:'Swift',python:'Python',javascript:'JavaScript',typescript:'TypeScript',json:'JSON',yaml:'YAML',sql:'SQL',xml:'HTML / XML',html:'HTML',objectivec:'Objective-C',c:'C',kotlin:'Kotlin',ruby:'Ruby',php:'PHP',css:'CSS',cpp:'C++',csharp:'C#',go:'Go',rust:'Rust',java:'Java',nginx:'Nginx',text:ziloUI.plain,plaintext:ziloUI.plain})[language] || language;
         token.meta={language:language,label:label,highlight:highlighted ? highlighted.value : escape(token.content)};
         var id = codes.push(token.content) - 1;
-        return '<section class="code-card"><header><span>'+escape(label)+'</span><a aria-label="复制代码" href="zilo-copy:'+id+'">复制</a></header><pre><code class="hljs">'+(highlighted ? highlighted.value : escape(token.content))+'</code></pre></section>';
+        return '<section class="code-card"><header><a class="code-language" aria-label="选择代码语言" href="zilo-language:'+id+'">'+escape(label)+' <svg class="language-chevron" viewBox="0 0 10 14" aria-hidden="true"><path d="M2 5 5 2 8 5M2 9 5 12 8 9"/></svg></a><a aria-label="复制代码" href="zilo-copy:'+id+'">'+escape(ziloUI.copy)+'</a></header><pre><code class="hljs">'+(highlighted ? highlighted.value : escape(token.content))+'</code></pre></section>';
       };
       var image = md.renderer.rules.image;
       md.renderer.rules.image = function(tokens,index,options,env,self) {
@@ -108,17 +112,20 @@ final class MarkdownRenderer {
         var html=image(tokens,index,options,env,self); token.attrSet('src',src); return html;
       };
       var tokens=md.parse(source,{});
-      var html=source ? md.renderer.render(tokens,md.options,{}) : '<p class="empty">预览将在这里显示</p>';
-      function plain(t) { return {type:t.type,tag:t.tag,content:t.content,attrs:t.attrs || [],meta:t.meta || {},hidden:t.hidden,children:t.children ? t.children.map(plain) : []}; }
+      var html=source ? md.renderer.render(tokens,md.options,{}) : '<p class="empty">'+escape(ziloUI.preview)+'</p>';
+      function plain(t) { return {type:t.type,tag:t.tag,content:t.content,map:t.map,attrs:t.attrs || [],meta:t.meta || {},hidden:t.hidden,children:t.children ? t.children.map(plain) : []}; }
       return {html:html,codes:codes,tokens:tokens.map(plain)};
     }
     """#
 }
 
+#if os(macOS)
 struct MarkdownPreviewView: NSViewRepresentable {
     var source: String
     var baseURL: URL?
+    var onChangeLanguage: ((String) -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("accent") private var themeID = "blue"
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
@@ -127,24 +134,27 @@ struct MarkdownPreviewView: NSViewRepresentable {
         let view = WKWebView(frame: .zero,configuration: config)
         view.navigationDelegate = context.coordinator
         view.setAccessibilityLabel("Markdown 预览正文")
-        context.coordinator.update(source,root: baseURL,dark: colorScheme == .dark,in: view)
+        context.coordinator.onChangeLanguage = onChangeLanguage
+        context.coordinator.update(source,root: baseURL,dark: colorScheme == .dark,theme: themeID,in: view)
         view.loadHTMLString(Self.page,baseURL: nil)
         return view
     }
     func updateNSView(_ view: WKWebView,context: Context) {
-        context.coordinator.update(source,root: baseURL,dark: colorScheme == .dark,in: view)
+        context.coordinator.onChangeLanguage = onChangeLanguage
+        context.coordinator.update(source,root: baseURL,dark: colorScheme == .dark,theme: themeID,in: view)
     }
     final class Coordinator: NSObject,WKNavigationDelegate,WKURLSchemeHandler {
-        var source: String?; var root: URL?; var dark = false; var ready = false
+        var source: String?; var root: URL?; var dark = false; var theme = ""; var ready = false
+        var onChangeLanguage: ((String) -> Void)?
         var rendered = MarkdownRenderer.Result(html: "",codes: [])
-        func update(_ value: String,root: URL?,dark: Bool,in view: WKWebView) {
-            guard value != source || root != self.root || dark != self.dark else { return }
-            self.source = value; self.root = root; self.dark = dark
+        func update(_ value: String,root: URL?,dark: Bool,theme: String = "blue",in view: WKWebView) {
+            guard value != source || root != self.root || dark != self.dark || theme != self.theme else { return }
+            self.source = value; self.root = root; self.dark = dark; self.theme = theme
             rendered = MarkdownRenderer.shared.render(value)
             if ready { display(in: view) }
         }
         func display(in view: WKWebView) {
-            guard let data = try? JSONSerialization.data(withJSONObject: [rendered.html,dark]),let args = String(data: data,encoding: .utf8) else { return }
+            guard let data = try? JSONSerialization.data(withJSONObject: [rendered.html,dark,String(format: "#%06X",AppTheme.resolve(theme).value("accent",dark: dark))]),let args = String(data: data,encoding: .utf8) else { return }
             view.evaluateJavaScript("updatePreview.apply(null," + args + ")",completionHandler: nil)
         }
         func webView(_ webView: WKWebView,didFinish navigation: WKNavigation!) { ready = true; display(in: webView) }
@@ -153,6 +163,16 @@ struct MarkdownPreviewView: NSViewRepresentable {
             if action.navigationType == .linkActivated {
                 if url.scheme == "zilo-copy",let index = Int(url.absoluteString.dropFirst("zilo-copy:".count)),rendered.codes.indices.contains(index) {
                     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(rendered.codes[index],forType: .string)
+                } else if url.scheme == "zilo-language",let index = Int(url.absoluteString.dropFirst("zilo-language:".count)),rendered.codes.indices.contains(index),onChangeLanguage != nil {
+                    let current = CodeLanguage.fences(rendered)[index]["meta"] as? [String:Any]
+                    decisionHandler(.cancel)
+                    DispatchQueue.main.async { [weak self,weak webView] in
+                        guard let self,let webView else { return }
+                        CodeLanguageMenu.show(current: current?["language"] as? String ?? "",at: webView.convert(webView.window?.mouseLocationOutsideOfEventStream ?? .zero,from: nil),in: webView) { language in
+                            if let source = self.source,let changed = CodeLanguage.replacing(source,index: index,language: language) { self.onChangeLanguage?(changed) }
+                        }
+                    }
+                    return
                 } else if ["http","https","mailto"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }
                 else if let fragment = url.fragment,url.scheme == "about" {
                     let encoded = try? JSONSerialization.data(withJSONObject: [fragment])
@@ -175,8 +195,8 @@ struct MarkdownPreviewView: NSViewRepresentable {
     <!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src zilo-image: data:; style-src 'unsafe-inline'; script-src 'nonce-zilo-preview';"><style>
     :root{color-scheme:light;--bg:#fff;--text:#242730;--muted:#656b78;--border:#e6e8ee;--code:#f5f6f8;--accent:#526ae8;--keyword:#a626a4;--string:#267b42;--number:#986801;--function:#2557a7;--comment:#707785}
     :root[data-dark=true]{color-scheme:dark;--bg:#202126;--text:#eceef4;--muted:#b1b5c0;--border:#383a44;--code:#282a32;--accent:#a4b2ff;--keyword:#db9bdf;--string:#9acd9b;--number:#e9bf83;--function:#99bded;--comment:#9a9fae}
-    *{box-sizing:border-box}html{background:var(--bg);color:var(--text);font:14px/1.65 -apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;-webkit-text-size-adjust:100%}body{margin:0;padding:0 1px 32px;overflow-wrap:anywhere}article{max-width:780px;margin:auto}p{margin:0 0 16px}h1,h2,h3,h4,h5,h6{line-height:1.45;letter-spacing:-.015em;font-weight:650;margin:22px 0 12px}article>:first-child{margin-top:0}h1{font-size:24px}h2{font-size:20px}h3{font-size:18px}h4{font-size:16px}h5,h6{font-size:14px}h1,h2{padding-bottom:8px;border-bottom:1px solid var(--border)}ul,ol{padding-left:25px;margin:8px 0 20px}li{padding-left:3px;margin:6px 0}li>p{margin:4px 0 8px}li>ul,li>ol{margin:4px 0 8px}blockquote{margin:18px 0;padding:2px 0 2px 16px;border-left:3px solid var(--accent);color:var(--muted)}blockquote p:last-child{margin-bottom:0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}code{font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:2px 5px;border-radius:4px}pre code{background:transparent;padding:0;border-radius:0;white-space:pre;overflow-wrap:normal}.code-card{margin:18px 0 22px;border:1px solid var(--border);border-radius:9px;background:var(--code);overflow:hidden}.code-card header{display:flex;align-items:center;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--border);font-size:11px;line-height:1.4;color:var(--muted)}.code-card header a{font-size:11px;padding:2px 4px}pre{margin:0;padding:14px 16px;overflow-x:auto;line-height:1.65;tab-size:4}img{display:block;max-width:100%;max-height:480px;object-fit:contain;margin:14px 0;border-radius:6px}table{display:block;overflow-x:auto;border-collapse:collapse;margin:18px 0;font-size:13px}th,td{padding:8px 12px;border:1px solid var(--border);min-width:80px}th{background:var(--code);font-weight:600}hr{border:0;border-top:1px solid var(--border);margin:24px 0}.task-checkbox{width:14px;height:14px;margin:0 7px 0 0;vertical-align:-2px;accent-color:var(--accent)}.mindmap{margin:18px 0;overflow:auto;border:1px solid var(--border);border-radius:9px;background:white}.mindmap svg{display:block;width:100%;height:auto}.empty,.missing-image{color:var(--muted)}.hljs-keyword,.hljs-selector-tag,.hljs-meta{color:var(--keyword)}.hljs-string,.hljs-regexp,.hljs-addition,.hljs-attribute{color:var(--string)}.hljs-number,.hljs-literal,.hljs-symbol,.hljs-bullet{color:var(--number)}.hljs-title,.hljs-built_in,.hljs-type,.hljs-section{color:var(--function)}.hljs-comment,.hljs-quote{color:var(--comment);font-style:italic}.hljs-deletion{color:#c54747}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:bold}
-    </style></head><body><article id="document" aria-label="Markdown 预览正文"></article><script nonce="zilo-preview">function updatePreview(html,dark){var x=window.scrollX,y=window.scrollY;document.documentElement.dataset.dark=String(dark);document.getElementById('document').innerHTML=html;window.scrollTo(x,y);}</script></body></html>
+    *{box-sizing:border-box}html{background:var(--bg);color:var(--text);font:14px/1.65 -apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;-webkit-text-size-adjust:100%}body{margin:0;padding:0 1px 32px;overflow-wrap:anywhere}article{max-width:780px;margin:auto}p{margin:0 0 16px}h1,h2,h3,h4,h5,h6{line-height:1.45;letter-spacing:-.015em;font-weight:650;margin:22px 0 12px}article>:first-child{margin-top:0}h1{font-size:24px}h2{font-size:20px}h3{font-size:18px}h4{font-size:16px}h5,h6{font-size:14px}h1,h2{padding-bottom:8px;border-bottom:1px solid var(--border)}ul,ol{padding-left:25px;margin:8px 0 20px}li{padding-left:3px;margin:6px 0}li>p{margin:4px 0 8px}li>ul,li>ol{margin:4px 0 8px}blockquote{margin:18px 0;padding:2px 0 2px 16px;border-left:3px solid var(--accent);color:var(--muted)}blockquote p:last-child{margin-bottom:0}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}code{font:12.5px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--code);padding:2px 5px;border-radius:4px}pre code{background:transparent;padding:0;border-radius:0;white-space:pre;overflow-wrap:normal}.code-card{margin:18px 0 22px;border:1px solid var(--border);border-radius:9px;background:var(--code);overflow:hidden}.code-card header{display:flex;align-items:center;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--border);font-size:11px;line-height:1.4;color:var(--muted)}.code-card header a{font-size:12px;padding:3px 5px;color:var(--muted);border-radius:5px}.code-card header a:hover{background:var(--border);text-decoration:none}.code-language{display:inline-flex;align-items:center;gap:6px}.language-chevron{width:8px;height:11px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}.code-card header{border-bottom:0;padding:10px 12px 2px}.code-card pre{padding-top:10px}pre{margin:0;padding:14px 16px;overflow-x:auto;line-height:1.65;tab-size:4}img{display:block;max-width:100%;max-height:480px;object-fit:contain;margin:14px 0;border-radius:6px}table{display:block;overflow-x:auto;border-collapse:collapse;margin:18px 0;font-size:13px}th,td{padding:8px 12px;border:1px solid var(--border);min-width:80px}th{background:var(--code);font-weight:600}hr{border:0;border-top:1px solid var(--border);margin:24px 0}.task-checkbox{width:14px;height:14px;margin:0 7px 0 0;vertical-align:-2px;accent-color:var(--accent)}.mindmap{margin:18px 0;overflow:auto;border:1px solid var(--border);border-radius:9px;background:white}.mindmap svg{display:block;width:100%;height:auto}.empty,.missing-image{color:var(--muted)}.hljs-keyword,.hljs-selector-tag,.hljs-meta{color:var(--keyword)}.hljs-string,.hljs-regexp,.hljs-addition,.hljs-attribute{color:var(--string)}.hljs-number,.hljs-literal,.hljs-symbol,.hljs-bullet{color:var(--number)}.hljs-title,.hljs-built_in,.hljs-type,.hljs-section{color:var(--function)}.hljs-comment,.hljs-quote{color:var(--comment);font-style:italic}.hljs-deletion{color:#c54747}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:bold}
+    </style></head><body><article id="document" aria-label="Markdown 预览正文"></article><script nonce="zilo-preview">function updatePreview(html,dark,accent){var x=window.scrollX,y=window.scrollY;document.documentElement.dataset.dark=String(dark);document.documentElement.style.setProperty("--accent",accent);document.getElementById('document').innerHTML=html;window.scrollTo(x,y);}</script></body></html>
     """#
 }
 
@@ -208,3 +228,89 @@ struct WindowChrome: NSViewRepresentable {
         deinit { observers.forEach(NotificationCenter.default.removeObserver) }
     }
 }
+
+
+/// Language selection changes only the opening fence; code bytes stay literal.
+enum CodeLanguage {
+    static let common: [(String,String)] = [("swift","Swift"),("objectivec","Objective-C"),("c","C"),("cpp","C++"),("csharp","C#"),("java","Java"),("javascript","JavaScript"),("typescript","TypeScript"),("python","Python"),("go","Go"),("rust","Rust"),("kotlin","Kotlin"),("ruby","Ruby"),("php","PHP"),("xml","HTML / XML"),("css","CSS"),("bash","Bash"),("sql","SQL"),("json","JSON"),("yaml","YAML"),("nginx","Nginx")]
+    static func fences(_ rendered: MarkdownRenderer.Result) -> [[String:Any]] {
+        rendered.tokens.filter { $0["type"] as? String == "fence" && ($0["meta"] as? [String:Any])?["kind"] as? String != "mindmap" }
+    }
+    static func replacing(_ source: String,index: Int,language: String) -> String? {
+        let tokens = fences(MarkdownRenderer.shared.render(source))
+        guard tokens.indices.contains(index), let lines = tokens[index]["map"] as? [Int],let line = lines.first,
+              language.isEmpty || language == "plaintext" || MarkdownRenderer.shared.languages.contains(language) else { return nil }
+        let text = source as NSString; var location = 0
+        for _ in 0..<line { guard location < text.length else { return nil }; location = NSMaxRange(text.lineRange(for: NSRange(location: location,length: 0))) }
+        let range = text.lineRange(for: NSRange(location: location,length: 0)),opening = text.substring(with: range) as NSString
+        guard let marker = try? NSRegularExpression(pattern: "`{3,}|~{3,}"),let match = marker.firstMatch(in: opening as String,range: NSRange(location: 0,length: opening.length)) else { return nil }
+        let body = (opening as String).trimmingCharacters(in: .newlines) as NSString
+        let replacement = NSRange(location: range.location + NSMaxRange(match.range),length: body.length - NSMaxRange(match.range))
+        return text.replacingCharacters(in: replacement,with: language)
+    }
+    static func richBlock(code: String,language: String) -> NSAttributedString {
+        let runs = (try? NSRegularExpression(pattern: "`+").matches(in: code,range: NSRange(location: 0,length: (code as NSString).length))) ?? []
+        let fence = String(repeating: "`",count: max(3,(runs.map { $0.range.length }.max() ?? 0) + 1))
+        return MarkdownDocument.parse(fence + language + "\n" + code + (code.hasSuffix("\n") ? "" : "\n") + fence).content
+    }
+    static func decorateLegacyBlocks(_ content: NSAttributedString) -> NSAttributedString {
+        var ranges: [NSRange] = []
+        content.enumerateAttributes(in: NSRange(location: 0,length: content.length)) { attrs,range,_ in
+            guard MarkdownTyping.isCodeBlock(attrs),DocumentStyle.metadata(attrs)["kind"] != "code" else { return }
+            if let last = ranges.last,NSMaxRange(last) == range.location { ranges[ranges.count - 1] = NSUnionRange(last,range) }
+            else { ranges.append(range) }
+        }
+        let result = NSMutableAttributedString(attributedString: content)
+        for range in ranges.reversed() {
+            let parsed = richBlock(code: content.attributedSubstring(from: range).string,language: "")
+            var length = 0
+            parsed.enumerateAttribute(.ziloBlock,in: NSRange(location: 0,length: parsed.length)) { value,piece,_ in if value != nil { length = NSMaxRange(piece) } }
+            if length > 0 { result.replaceCharacters(in: range,with: parsed.attributedSubstring(from: NSRange(location: 0,length: length))) }
+        }
+        return result
+    }
+    @discardableResult static func changeRichBlock(_ block: String,language: String,in editor: NSTextView) -> Bool {
+        guard let storage = editor.textStorage else { return false }
+        var range = NSRange(location: NSNotFound,length: 0); var code = ""
+        storage.enumerateAttribute(.ziloBlock,in: NSRange(location: 0,length: storage.length)) { value,piece,_ in
+            guard let meta = value as? [String:String],meta["block"] == block else { return }
+            range = range.location == NSNotFound ? piece : NSUnionRange(range,piece)
+            if meta["kind"] == "code" { code += storage.attributedSubstring(from: piece).string }
+        }
+        guard range.location != NSNotFound else { return false }
+        let parsed = richBlock(code: code,language: language)
+        var length = 0
+        parsed.enumerateAttribute(.ziloBlock,in: NSRange(location: 0,length: parsed.length)) { value,piece,_ in if value != nil { length = NSMaxRange(piece) } }
+        guard length > 0 else { return false }
+        let replacement = parsed.attributedSubstring(from: NSRange(location: 0,length: length))
+        guard editor.performValidatedReplacement(in: range,with: replacement) else { return false }
+        editor.setSelectedRange(NSRange(location: range.location + replacement.length,length: 0))
+        return true
+    }
+}
+
+final class CodeLanguageMenu: NSObject {
+    let action: (String) -> Void
+    init(action: @escaping (String) -> Void) { self.action = action }
+    @objc func choose(_ item: NSMenuItem) { if let language = item.representedObject as? String { action(language) } }
+    static func show(current: String,at point: NSPoint,in view: NSView,action: @escaping (String) -> Void) {
+        let handler = CodeLanguageMenu(action: action),menu = NSMenu()
+        let heading = NSMenuItem(title: ZiloLanguage.text("代码"),action: nil,keyEquivalent: ""); heading.isEnabled = false; menu.addItem(heading)
+        func append(_ id: String,_ title: String,to target: NSMenu) {
+            let localizedTitle = ZiloLanguage.text(title)
+            let item = NSMenuItem(title: localizedTitle,action: #selector(choose(_:)),keyEquivalent: "")
+            item.target = handler; item.representedObject = id
+            item.state = current == id || (id == "plaintext" && current == "text") ? .on : .off
+            if item.state == .on { item.attributedTitle = NSAttributedString(string: localizedTitle,attributes: [.foregroundColor: NSColor.controlAccentColor]) }
+            target.addItem(item)
+        }
+        for (id,title) in CodeLanguage.common { append(id,title,to: menu) }
+        menu.addItem(.separator()); append("","自动检测",to: menu); append("plaintext","纯文本",to: menu)
+        let more = NSMenu(),common = Set(CodeLanguage.common.map { $0.0 } + ["plaintext"])
+        for id in MarkdownRenderer.shared.languages.sorted() where !common.contains(id) { append(id,id,to: more) }
+        let moreItem = NSMenuItem(title: ZiloLanguage.text("更多语言"),action: nil,keyEquivalent: ""); moreItem.submenu = more; menu.addItem(moreItem)
+        withExtendedLifetime(handler) { menu.popUp(positioning: nil,at: point,in: view) }
+    }
+}
+
+#endif

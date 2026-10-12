@@ -3,6 +3,10 @@ import AppKit
 import UniformTypeIdentifiers
 
 struct TaskDetailView: View {
+    var selection: Binding<UUID?>? = nil
+    var startInPreview = false
+    var initialSplitPreview = false
+    @AppStorage("accent") private var applicationTheme = "blue"
     @EnvironmentObject var store: Store
     @EnvironmentObject var calendar: CalendarService
     @EnvironmentObject var focus: FocusTimer
@@ -15,9 +19,11 @@ struct TaskDetailView: View {
     @State private var showFormatting = false
     @State private var showChecks = false
     @State private var showChildren = false
-    @AppStorage("markdownPreviewVisible") private var previewMarkdown = true
+    @State private var previewMarkdown = false
+    @State private var previewSidebar = false
     @State private var bodyHeight: CGFloat = 26
     @State private var hoveredCheck: UUID?
+    @State private var reminderCheck: UUID?
     @State private var childTitle = ""
     @State private var checkTitle = ""
     @State private var showHistory = false
@@ -26,21 +32,28 @@ struct TaskDetailView: View {
     @State private var linkAddress = ""
     @State private var customReminder = 45.0
     @FocusState private var focusedEntry: String?
-    var task: TaskItem? { store.tasks.first { $0.id == store.selectedTask } }
+    var selectedID: UUID? { selection == nil ? store.selectedTask : selection?.wrappedValue }
+    var task: TaskItem? { store.tasks.first { $0.id == selectedID } }
+    func selectTask(_ id: UUID) {
+        commitDocument()
+        if let selection { selection.wrappedValue = id }
+        else { store.selectedTask = id }
+    }
+    func commitDocument() {
+        document.editor?.unmarkText(); document.editor?.didChangeText()
+        document.editor?.window?.makeFirstResponder(nil)
+    }
     func binding<T>(_ path: WritableKeyPath<TaskItem,T>,default value: T) -> Binding<T> {
         Binding(get: { task?[keyPath: path] ?? value },set: { new in if let id = task?.id { store.mutate(id) { $0[keyPath: path] = new } } })
     }
     var body: some View {
+        let _ = applicationTheme
+
         Group {
             if let task {
                 GeometryReader { geometry in
-                    HSplitView {
-                        detailContent(task,documentHeight: max(220,geometry.size.height - (showFormatting ? 270 : 225)))
-                            .ignoresSafeArea(.container,edges: .top).frame(minWidth: 300,maxWidth: .infinity,maxHeight: .infinity)
-                        if task.editingMode == .markdown && previewMarkdown {
-                            previewPane(task).ignoresSafeArea(.container,edges: .top).frame(minWidth: 260,idealWidth: 340,maxWidth: .infinity,maxHeight: .infinity)
-                        }
-                    }
+                    detailContent(task,documentHeight: max(220,geometry.size.height - (showFormatting && !previewMarkdown ? 270 : 225)))
+                        .frame(minWidth: 300,maxWidth: .infinity,maxHeight: .infinity)
                 }
                 .buttonStyle(.plain)
                 .sheet(isPresented: $showHistory) { HistoryView(taskID: task.id).environmentObject(store) }
@@ -49,15 +62,17 @@ struct TaskDetailView: View {
             } else {
                 QuietEmptyState(title: "选择一个任务",message: "查看详细内容、安排时间或开始专注",symbol: "square.and.pencil")
             }
-        }.frame(minWidth: task?.editingMode == .markdown && previewMarkdown ? 540 : 340,maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
+        }.frame(minWidth: previewSidebar ? 520 : 340,maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
             .background(ListTheme.canvas)
             .onAppear(perform: resetEditor)
-            .onChange(of: store.selectedTask) { _,_ in resetEditor() }
+            .onChange(of: selectedID) { _,_ in resetEditor() }
     }
     func resetEditor() {
         childTitle = ""; checkTitle = ""; focusedEntry = nil
         showDate = false; showOrganization = false; showChecks = false; showChildren = false; showLink = false
         bodyHeight = 26; hoveredCheck = nil
+        previewSidebar = initialSplitPreview && task?.editingMode == .markdown
+        previewMarkdown = !previewSidebar && startInPreview && task?.editingMode == .markdown
     }
     func detailContent(_ task: TaskItem,documentHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
@@ -77,12 +92,12 @@ struct TaskDetailView: View {
                         if !task.tags.isEmpty {
                             Button { showOrganization = true } label: { Label(task.tags.map { "#" + $0 }.joined(separator: "  "),systemImage: "tag").font(.callout).foregroundStyle(.secondary) }
                         }
-                        if let parent = task.parentID { Button("返回父任务") { store.selectedTask = parent } }
+                        if let parent = task.parentID { Button("返回父任务") { selectTask(parent) } }
                     }.padding(.horizontal,24).padding(.top,18).padding(.bottom,24)
                 }
                 .onChange(of: focusedEntry) { _,entry in if let entry { reader.scrollTo(entry,anchor: .bottom) } }
             }.id(task.id)
-            if showFormatting { formattingBar(task).padding(.horizontal,20).padding(.bottom,12) }
+            if showFormatting && !previewMarkdown { formattingBar(task).padding(.horizontal,20).padding(.bottom,12) }
             footer(task)
         }
     }
@@ -91,18 +106,14 @@ struct TaskDetailView: View {
         document.editor?.unmarkText(); document.editor?.didChangeText()
         guard var current = store.tasks.first(where: { $0.id == id }) else { return }
         do { TaskDocument.switchMode(&current,to: mode,baseURL: store.persistence.root); try store.externalizeDocumentImages(&current); store.save(current) } catch { store.error = error.localizedDescription }
-        document.activeFormats = []
+        document.activeFormats = []; previewMarkdown = false; previewSidebar = false
     }
-    func previewPane(_ task: TaskItem) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Label("Markdown 预览",systemImage: "doc.richtext").font(.system(size: 13,weight: .medium))
-                Spacer()
-                Button { previewMarkdown = false } label: { Image(systemName: "xmark").font(.system(size: 11)) }.accessibilityLabel("关闭右侧预览")
-            }.foregroundStyle(.secondary).padding(.horizontal,18).frame(height: 52)
-            Divider()
-            MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root).padding(20)
-        }.background(ListTheme.canvas)
+    var previewSelection: Binding<Bool> {
+        Binding(get: { previewMarkdown },set: { value in
+            document.editor?.unmarkText(); document.editor?.didChangeText()
+            if value { document.editor?.window?.makeFirstResponder(nil) }
+            previewMarkdown = value; previewSidebar = false
+        })
     }
     func beginEntry(_ entry: String) {
         if entry == "check" { showChecks = true } else { showChildren = true }
@@ -127,6 +138,22 @@ struct TaskDetailView: View {
         }.padding(.horizontal,24).frame(height: 52)
     }
     @ViewBuilder func documentBody(_ task: TaskItem,height: CGFloat) -> some View {
+        VStack(alignment: .leading,spacing: 12) {
+            if task.editingMode == .markdown {
+                HStack(spacing: 10) {
+                    Spacer()
+                    Picker("正文编辑方式",selection: previewSelection) { Text("编辑").tag(false); Text("预览").tag(true) }.labelsHidden().pickerStyle(.segmented).frame(width: 130)
+                    Button {
+                        document.editor?.unmarkText(); document.editor?.didChangeText()
+                        previewSidebar.toggle(); previewMarkdown = false
+                    } label: { Image(systemName: "sidebar.right").font(.system(size: 16)).frame(width: 28,height: 28) }
+                        .quietHover(selected: previewSidebar).foregroundStyle(previewSidebar ? ListTheme.accent : ListTheme.secondary)
+                        .help(previewSidebar ? "关闭并排预览" : "打开并排预览").accessibilityLabel("并排预览")
+                        .accessibilityAddTraits(previewSidebar ? .isSelected : [])
+                }
+            }
+            HStack(alignment: .top,spacing: 0) {
+            ZStack(alignment: .topLeading) {
             HStack(alignment: .top,spacing: 6) {
                 Menu {
                     Button("检查项",systemImage: "checklist") { beginEntry("check") }
@@ -146,7 +173,18 @@ struct TaskDetailView: View {
                 }.id(task.editingMode).frame(height: height).overlay(alignment: .topLeading) {
                     if task.notes.isEmpty { Text(task.editingMode == .markdown ? "输入 Markdown 源码…" : "输入内容，支持 Markdown 快捷语法…").font(.system(size: 14)).foregroundStyle(.tertiary).padding(.top,3).allowsHitTesting(false) }
                 }
-            }.padding(.leading,-20)
+            }.padding(.leading,-20).opacity(previewMarkdown ? 0 : 1).allowsHitTesting(!previewMarkdown).accessibilityHidden(previewMarkdown)
+            if task.editingMode == .markdown && previewMarkdown {
+                MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,onChangeLanguage: { source in store.mutate(task.id) { $0.notes = source } }).frame(height: height).accessibilityLabel("Markdown 预览")
+            }
+            }.frame(maxWidth: .infinity,alignment: .topLeading)
+            if task.editingMode == .markdown && previewSidebar {
+                Divider().padding(.horizontal,16).frame(height: height)
+                MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,onChangeLanguage: { source in store.mutate(task.id) { $0.notes = source } })
+                    .frame(maxWidth: .infinity).frame(height: height).accessibilityLabel("Markdown 侧栏预览")
+            }
+            }
+        }
     }
     @ViewBuilder func relatedItems(_ task: TaskItem) -> some View {
         if !task.checks.isEmpty || showChecks {
@@ -173,7 +211,7 @@ struct TaskDetailView: View {
                 Divider()
                 ForEach(children) { child in HStack {
                     Button { store.complete(child.id) } label: { Image(systemName: child.completed ? "checkmark.square.fill" : "square").foregroundStyle(.secondary) }.accessibilityLabel("完成子任务")
-                    Button(child.title) { store.selectedTask = child.id }.strikethrough(child.completed).foregroundStyle(child.completed ? .secondary : .primary)
+                    Button(child.title) { selectTask(child.id) }.strikethrough(child.completed).foregroundStyle(child.completed ? .secondary : .primary)
                     Spacer()
                     Button { store.mutate(child.id) { $0.deleted = true } } label: { Image(systemName: "xmark").font(.caption).foregroundStyle(.tertiary) }.help("移除子任务")
                 } }
@@ -182,7 +220,7 @@ struct TaskDetailView: View {
                     TextField("添加子任务，回车保存",text: $childTitle).textFieldStyle(.plain).focused($focusedEntry,equals: "child").onSubmit {
                         let title = childTitle.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !title.isEmpty else { return }
-                        if store.add(title,listID: task.listID,parentID: task.id) != nil { childTitle = ""; store.selectedTask = task.id; showChildren = true; focusedEntry = "child" }
+                        if store.add(title,listID: task.listID,parentID: task.id) != nil { childTitle = ""; showChildren = true; focusedEntry = "child" }
                     }
                     Button { showChildren = false; childTitle = ""; focusedEntry = nil } label: { Image(systemName: "xmark").font(.caption) }.help("关闭子任务输入")
                 }.id("child") }
@@ -222,6 +260,11 @@ struct TaskDetailView: View {
                 }),axis: .vertical).textFieldStyle(.plain).strikethrough(check.done).foregroundStyle(check.done ? .secondary : .primary)
                     .focused($focusedEntry,equals: check.id.uuidString).onSubmit { continueAfter(task,check: check) }
                     .accessibilityLabel("检查项内容")
+                Button { reminderCheck = check.id } label: { Image(systemName: check.due == nil ? "bell" : "bell.fill").font(.system(size: 12)).foregroundStyle(check.due == nil ? ListTheme.secondary : ListTheme.accent).frame(width: 22,height: 26) }
+                    .opacity(check.due != nil || hoveredCheck == check.id || focusedEntry == check.id.uuidString ? 1 : 0).accessibilityLabel("检查项提醒")
+                    .popover(isPresented: Binding(get: { reminderCheck == check.id },set: { if !$0 { reminderCheck = nil } })) {
+                        CheckReminderSettings(check: Binding(get: { self.task?.checks.first { $0.id == check.id } ?? check },set: { updated in store.mutate(task.id) { item in if let index = item.checks.firstIndex(where: { $0.id == check.id }) { item.checks[index] = updated } } })).frame(width: 320).padding(20)
+                    }
                 Menu {
                     Button("上移",systemImage: "arrow.up") { endCheckEditing(); store.moveCheck(task.id,checkID: check.id,offset: -1) }.disabled(task.checks.first?.id == check.id)
                     Button("下移",systemImage: "arrow.down") { endCheckEditing(); store.moveCheck(task.id,checkID: check.id,offset: 1) }.disabled(task.checks.last?.id == check.id)
@@ -240,10 +283,10 @@ struct TaskDetailView: View {
             Menu {
                 Button("收集箱") { store.mutate(task.id) { $0.listID = nil; $0.section = "" } }
                 ForEach(store.lists.filter { !$0.deleted }) { list in Button(list.name) { store.mutate(task.id) { $0.listID = list.id; $0.section = "" } } }
-            } label: { HStack(spacing: 6) { Image(systemName: "tray.and.arrow.down"); Text(store.lists.first { $0.id == task.listID }?.name ?? "收集箱").lineLimit(1) } }
+            } label: { HStack(spacing: 6) { Image(systemName: "tray.and.arrow.down"); Text(store.lists.first { $0.id == task.listID }?.name ?? ZiloLanguage.text("收集箱")).lineLimit(1) } }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.primary).fixedSize().accessibilityLabel("所属清单")
             Spacer()
-            Button { showFormatting.toggle() } label: { Text("A").font(.system(size: 18)).underline().frame(width: 28,height: 28).background(showFormatting ? Color.secondary.opacity(0.1) : .clear,in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel("格式工具栏").help("格式工具栏")
+            Button { if previewMarkdown { previewSelection.wrappedValue = false }; showFormatting.toggle() } label: { Text("A").font(.system(size: 18)).underline().frame(width: 28,height: 28).background(showFormatting ? Color.secondary.opacity(0.1) : .clear,in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel("格式工具栏").help("格式工具栏")
             Menu { moreActions(task) } label: { Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 32,height: 32).contentShape(Rectangle()) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.primary).fixedSize().accessibilityLabel("任务更多操作").help("任务更多操作")
         }.foregroundStyle(.secondary).padding(.horizontal,24).padding(.vertical,12)
@@ -264,7 +307,7 @@ struct TaskDetailView: View {
                 Group { if format == .heading { Text("H").font(.system(size: 17)) } else { Image(systemName: format.symbol) } }.frame(width: 27,height: 28)
                     .foregroundStyle(document.activeFormats.contains(format) ? Color.accentColor : .primary)
                     .background(document.activeFormats.contains(format) ? Color.accentColor.opacity(0.10) : .clear,in: RoundedRectangle(cornerRadius: 5))
-            }.help(format.title).accessibilityLabel(format.title)
+            }.help(ZiloLanguage.text(format.title)).accessibilityLabel(format.title)
         }
         Button { beginEntry("check") } label: { Image(systemName: "checklist").frame(width: 28,height: 28) }.help("添加检查项").accessibilityLabel("添加检查项")
         Button { attach(task) } label: { Image(systemName: "paperclip").frame(width: 28,height: 28) }.help("上传附件").accessibilityLabel("上传附件")
@@ -307,23 +350,39 @@ struct TaskDetailView: View {
         if format == .link { linkTitle = document.selectedText; linkAddress = ""; showLink = true }
         else { document.apply(format) }
     }
-    var linkURL: URL? {
-        guard let url = URL(string: linkAddress.trimmingCharacters(in: .whitespacesAndNewlines)), let scheme = url.scheme?.lowercased(), ["https","http","mailto","ownlist"].contains(scheme), scheme != "https" && scheme != "http" || url.host?.isEmpty == false else { return nil }
-        return url
-    }
+    var linkURL: URL? { DocumentLink.url(linkAddress) }
     var linkEditor: some View {
         VStack(alignment: .leading,spacing: 16) {
             Text("插入链接").font(.title2.bold())
-            TextField("显示文字",text: $linkTitle).textFieldStyle(.roundedBorder)
-            TextField("链接地址，例如 https://example.com",text: $linkAddress).textFieldStyle(.roundedBorder)
-            HStack { Button("取消") { showLink = false }.keyboardShortcut(.cancelAction); Spacer(); Button("插入") { if let url = linkURL { document.insertLink(title: linkTitle.trimmingCharacters(in: .whitespacesAndNewlines),url: url); showLink = false } }.keyboardShortcut(.defaultAction).disabled(linkURL == nil || linkTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+            VStack(alignment: .leading,spacing: 6) {
+                Text("链接地址").font(.callout)
+                TextField("https://example.com",text: $linkAddress).textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("链接地址")
+            }
+            VStack(alignment: .leading,spacing: 6) {
+                Text("显示文字（可选）").font(.callout)
+                TextField("留空使用链接地址",text: $linkTitle).textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("链接显示文字")
+            }
+            if !linkAddress.isEmpty && linkURL == nil {
+                Text("请输入有效的网址，例如 https://example.com").font(.caption).foregroundStyle(.red)
+            }
+            HStack {
+                Button("取消") { showLink = false }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button("插入") {
+                    if let url = linkURL {
+                        document.insertLink(title: DocumentLink.title(linkTitle,url: url),url: url)
+                        showLink = false
+                    }
+                }.keyboardShortcut(.defaultAction).disabled(linkURL == nil)
+            }
         }.padding(24).frame(width: 420)
     }
     @ViewBuilder func moreActions(_ task: TaskItem) -> some View {
         Picker("正文编辑方式",selection: Binding(get: { task.editingMode },set: { changeMode($0) })) {
             ForEach(DocumentEditingMode.allCases,id: \.self) { mode in Text(mode.title).tag(mode) }
         }
-        if task.editingMode == .markdown { Toggle("右侧 Markdown 预览",isOn: $previewMarkdown) }
         if task.editingMode == .richText { Button("字体设置") { document.editor?.window?.makeFirstResponder(document.editor); NSFontManager.shared.orderFrontFontPanel(nil) } }
         Divider()
         Button("添加子任务",systemImage: "arrow.turn.down.right") { beginEntry("child") }
@@ -406,13 +465,13 @@ struct TaskDetailView: View {
     }
     func dateSettings(_ task: TaskItem) -> some View { VStack(alignment: .leading,spacing: 14) {
         HStack { Text("日期、重复与提醒").font(.headline); Spacer(); Button("完成") { showDate = false } }
-        Toggle("设置日期",isOn: Binding(get: { task.due != nil },set: { value in store.mutate(task.id) { $0.due = value ? Date() : nil; if !value { $0.reminders = [] } } }))
+        Toggle("设置日期",isOn: Binding(get: { task.due != nil },set: { value in store.mutate(task.id) { $0.setDue(value ? Date() : nil) } }))
         if task.due != nil {
-            DatePicker("截止",selection: Binding(get: { task.due ?? Date() },set: { new in store.mutate(task.id) { $0.due = new } }),displayedComponents: task.allDay ? .date : [.date,.hourAndMinute])
+            DatePicker("截止",selection: Binding(get: { task.due ?? Date() },set: { new in store.mutate(task.id) { $0.setDue(new) } }),displayedComponents: task.allDay ? .date : [.date,.hourAndMinute])
             Toggle("全天",isOn: binding(\.allDay,default: true))
-            Toggle("设置开始时间",isOn: Binding(get: { task.start != nil },set: { value in store.mutate(task.id) { $0.start = value ? task.due : nil } }))
-            if task.start != nil { DatePicker("开始",selection: Binding(get: { task.start ?? Date() },set: { new in store.mutate(task.id) { $0.start = new } })) }
-            Stepper("时长 \(Int(task.duration / 60)) 分钟",value: binding(\.duration,default: 1800),in: 300...86400,step: 300)
+            Toggle("设置开始时间",isOn: Binding(get: { task.start != nil },set: { value in store.mutate(task.id) { $0.setStart(value ? (task.due ?? Date()).addingTimeInterval(-max(60,task.duration)) : nil) } }))
+            if task.start != nil { DatePicker("开始",selection: Binding(get: { task.start ?? Date() },set: { new in store.mutate(task.id) { $0.setStart(new) } })) }
+            Stepper("时长 \(Int(task.duration / 60)) 分钟",value: Binding(get: { self.task?.duration ?? 1800 },set: { value in store.mutate(task.id) { $0.duration = value; if let start = $0.start { $0.due = start.addingTimeInterval(value) } } }),in: 300...86400,step: 300)
             RepeatEditor(rule: binding(\.repeatRule,default: RepeatRule()))
             VStack(alignment: .leading) {
                 Text("提醒").font(.headline)
@@ -441,6 +500,7 @@ struct RepeatEditor: View {
 }
 struct WeekdayPicker: View { @Binding var days: [Int]; var body: some View { HStack(spacing: 4) { ForEach(1...7,id: \.self) { i in Button(["日","一","二","三","四","五","六"][i-1]) { if days.contains(i) { days.removeAll { $0 == i } } else { days.append(i) } }.buttonStyle(.bordered).tint(days.contains(i) ? .accentColor : .gray) } } } }
 struct ListEditor: View {
+    @AppStorage("accent") private var applicationTheme = "blue"
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) var dismiss
     var existing: TaskList?
@@ -458,6 +518,8 @@ struct ListEditor: View {
         ("列表","list.bullet.rectangle"),("看板","rectangle.split.3x1"),("时间线","chart.bar.xaxis")
     ]
     var body: some View {
+        let _ = applicationTheme
+
         HStack(spacing: 0) {
             VStack(alignment: .leading,spacing: 0) {
                 Text(existing == nil ? "新建清单" : "编辑清单")
@@ -683,7 +745,7 @@ private struct ListEditorPreview: View {
     }
     private func previewColumn(_ title: String) -> some View {
         VStack(alignment: .leading,spacing: 12) {
-            Text(title).font(.system(size: 10,weight: .medium)).foregroundStyle(ListTheme.secondary)
+            Text(LocalizedStringKey(title)).font(.system(size: 10,weight: .medium)).foregroundStyle(ListTheme.secondary)
             taskRow(58); taskRow(78)
         }.padding(10).frame(maxWidth: .infinity,alignment: .leading)
             .background(ListTheme.input,in: RoundedRectangle(cornerRadius: 7))
@@ -712,8 +774,239 @@ struct ImportView: View {
             for list in preview.backup.lists { if let existing = store.lists.first(where: { !$0.deleted && $0.name == list.name && $0.folder == list.folder }) { mapping[list.id] = existing.id } else { store.save(list); mapping[list.id] = list.id } }
             var count = 0; var skipped = 0
             for var task in preview.backup.tasks { if store.tasks.contains(where: { $0.id == task.id || (task.sourceID != nil && $0.sourceID == task.sourceID) }) { skipped += 1; continue }; if let list = task.listID { task.listID = mapping[list] ?? list }; store.save(task); count += 1 }
-            for item in preview.backup.filters where !store.filters.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.habits where !store.habits.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.focus where !store.focus.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.subscriptions where !store.subscriptions.contains(where: { $0.id == item.id }) { store.save(item) }
+            for item in preview.backup.countdowns ?? [] where !store.countdowns.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.filters where !store.filters.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.habits where !store.habits.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.focus where !store.focus.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.subscriptions where !store.subscriptions.contains(where: { $0.id == item.id }) { store.save(item) }
             result = "已导入 \(count) 条任务，跳过 \(skipped) 条重复；原数据已备份"
         } catch { store.error = error.localizedDescription }
     }
+}
+
+
+/// Keep a native field in the row so hovering and clicking never swap the view.
+struct TaskNameField: NSViewRepresentable {
+    var title: String
+    var completed: Bool
+    var fontSize: Double
+    var requestFocus: Bool
+    var onBegin: () -> Void
+    var onEnd: (String?) -> Void
+    var onDoubleClick: () -> Void = {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> TaskNameTextField {
+        let field = TaskNameTextField()
+        field.isBordered = false; field.drawsBackground = false
+        field.focusRingType = .none; field.isEditable = true; field.isSelectable = true
+        field.usesSingleLineMode = true; field.lineBreakMode = .byTruncatingTail
+        field.cell?.isScrollable = true
+        field.delegate = context.coordinator
+        field.onActivate = { [weak coordinator = context.coordinator] field in coordinator?.begin(field) }
+        field.onDoubleClick = { [weak coordinator = context.coordinator] in coordinator?.parent.onDoubleClick() }
+        field.setContentHuggingPriority(.defaultLow,for: .horizontal)
+        field.setContentCompressionResistancePriority(.defaultLow,for: .horizontal)
+        field.setAccessibilityLabel("任务名称")
+        return field
+    }
+    func updateNSView(_ field: TaskNameTextField,context: Context) {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        if !coordinator.editing {
+            let font = NSFont.systemFont(ofSize: fontSize)
+            field.font = font; field.textColor = completed ? .secondaryLabelColor : .labelColor
+            field.attributedStringValue = NSAttributedString(string: title,attributes: [
+                .font: font,.foregroundColor: completed ? NSColor.secondaryLabelColor : NSColor.labelColor,
+                .strikethroughStyle: completed ? NSUnderlineStyle.single.rawValue : 0])
+        }
+        if requestFocus && !coordinator.editing {
+            DispatchQueue.main.async { [weak field,weak coordinator] in
+                guard let field,let coordinator,coordinator.parent.requestFocus,!coordinator.editing else { return }
+                field.window?.makeFirstResponder(field)
+                coordinator.begin(field)
+            }
+        }
+    }
+    final class Coordinator: NSObject,NSTextFieldDelegate {
+        var parent: TaskNameField
+        var editing = false
+        var original = ""
+        var cancelled = false
+        init(_ parent: TaskNameField) { self.parent = parent }
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField else { return }
+            begin(field)
+        }
+        func begin(_ field: NSTextField) {
+            (field as? TaskNameTextField)?.trackDoubleClick()
+            if let editor = field.currentEditor() as? NSTextView {
+                editor.drawsBackground = false; editor.backgroundColor = .clear
+            }
+            guard !editing else { return }
+            original = field.stringValue; editing = true; cancelled = false
+            parent.onBegin()
+        }
+        func controlTextDidEndEditing(_ notification: Notification) {
+            guard let field = notification.object as? NSTextField,editing else { return }
+            let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            editing = false
+            if cancelled || value.isEmpty { field.stringValue = original }
+            parent.onEnd(cancelled || value.isEmpty ? nil : value)
+        }
+        func control(_ control: NSControl,textView: NSTextView,doCommandBy selector: Selector) -> Bool {
+            // Leave Return to the input method while it is composing Chinese text.
+            if selector == #selector(NSResponder.insertNewline(_:)), !textView.hasMarkedText() {
+                control.window?.makeFirstResponder(nil); return true
+            }
+            if selector == #selector(NSResponder.cancelOperation(_:)) {
+                cancelled = true
+                (control as? NSTextField)?.stringValue = original
+                control.window?.makeFirstResponder(nil); return true
+            }
+            return false
+        }
+    }
+}
+
+final class TaskNameTextField: NSTextField {
+    var onActivate: ((NSTextField) -> Void)?
+    var onDoubleClick: (() -> Void)?
+    private var lastClickPoint = NSPoint.zero
+    private var lastClickTime: TimeInterval = 0
+    private static weak var activeField: TaskNameTextField?
+    private static var doubleClickMonitor: Any?
+    func trackDoubleClick() {
+        Self.activeField = self
+        guard Self.doubleClickMonitor == nil else { return }
+        Self.doubleClickMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { event in
+            guard let field = Self.activeField,field.window === event.window,field.currentEditor() != nil else { return event }
+            if event.clickCount == 1 { field.lastClickPoint = event.locationInWindow; field.lastClickTime = event.timestamp; return event }
+            guard event.clickCount == 2,event.timestamp - field.lastClickTime <= NSEvent.doubleClickInterval,
+                  hypot(event.locationInWindow.x - field.lastClickPoint.x,event.locationInWindow.y - field.lastClickPoint.y) <= 6 else { return event }
+            let action = field.onDoubleClick
+            field.window?.makeFirstResponder(nil)
+            DispatchQueue.main.async { action?() }
+            return nil
+        }
+    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        if isEnabled && isEditable { addCursorRect(bounds,cursor: .iBeam) }
+    }
+    override func mouseDown(with event: NSEvent) {
+        lastClickPoint = event.locationInWindow; lastClickTime = event.timestamp
+        if event.clickCount == 2 {
+            window?.makeFirstResponder(nil); onDoubleClick?(); return
+        }
+        super.mouseDown(with: event)
+        // NSTextField selects all on its first click. Match the clicked position instead.
+        if event.clickCount == 1,let editor = currentEditor() as? NSTextView {
+            let point = editor.convert(event.locationInWindow,from: nil)
+            let index = min(editor.characterIndexForInsertion(at: point),(editor.string as NSString).length)
+            editor.setSelectedRange(NSRange(location: index,length: 0))
+        }
+        onActivate?(self)
+    }
+}
+
+/// Drop feedback lives only for a native drag session, including cancelled drags.
+@MainActor final class TaskDragFeedback: ObservableObject {
+    static let shared = TaskDragFeedback()
+    struct State: Equatable {
+        var session: Int
+        var target: UUID?
+        var position: TaskPlacement.Position = .before
+    }
+    @Published private(set) var state: State?
+    func begin(session: Int) { state = State(session: session) }
+    func hover(target: UUID,position: TaskPlacement.Position) {
+        guard var current = state else { return }
+        current.target = target; current.position = position
+        if state != current { state = current }
+    }
+    func exit(target: UUID) {
+        guard var current = state,current.target == target else { return }
+        current.target = nil; state = current
+    }
+    func end(session: Int) {
+        guard state?.session == session else { return }
+        state = nil
+    }
+}
+
+/// An AppKit drag source keeps the narrow grip responsive beside editable native fields.
+struct TaskDragHandle: NSViewRepresentable {
+    var payload: String
+    var visible: Bool
+    var onBegin: () -> Void
+    func makeNSView(context: Context) -> TaskDragHandleView {
+        let view = TaskDragHandleView(); view.title = ""; view.isBordered = false; view.setAccessibilityLabel("拖动任务"); return view
+    }
+    func updateNSView(_ view: TaskDragHandleView,context: Context) {
+        view.payload = payload; view.showsGrip = visible; view.onBegin = onBegin; view.needsDisplay = true
+    }
+}
+final class TaskDragHandleView: NSButton,NSDraggingSource {
+    override var acceptsFirstResponder: Bool { true }
+    var payload = ""
+    var showsGrip = false
+    var onBegin: (() -> Void)?
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func resetCursorRects() { addCursorRect(bounds,cursor: .openHand) }
+    override func draw(_ dirtyRect: NSRect) {
+        guard showsGrip,let image = NSImage(systemSymbolName: "line.3.horizontal",accessibilityDescription: "拖动任务") else { return }
+        image.draw(in: NSRect(x: 0,y: (bounds.height - 10) / 2,width: bounds.width,height: 10),from: .zero,operation: .sourceOver,fraction: 0.65)
+    }
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow,from: nil)
+        onBegin?()
+        let writer = NSPasteboardItem(); writer.setString(payload,forType: .string)
+        let item = NSDraggingItem(pasteboardWriter: writer)
+        let image = NSImage(systemSymbolName: "line.3.horizontal",accessibilityDescription: nil) ?? NSImage(size: NSSize(width: 12,height: 12))
+        item.setDraggingFrame(NSRect(x: point.x - 6,y: point.y - 6,width: 12,height: 12),contents: image)
+        beginDraggingSession(with: [item],event: event,source: self)
+    }
+    func draggingSession(_ session: NSDraggingSession,willBeginAt screenPoint: NSPoint) {
+        TaskDragFeedback.shared.begin(session: session.draggingSequenceNumber)
+    }
+    func draggingSession(_ session: NSDraggingSession,endedAt screenPoint: NSPoint,operation: NSDragOperation) {
+        // AppKit sends this for successful drops, Esc, and drops outside the window.
+        TaskDragFeedback.shared.end(session: session.draggingSequenceNumber)
+    }
+    func draggingSession(_ session: NSDraggingSession,sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .move }
+    func ignoreModifierKeys(for session: NSDraggingSession) -> Bool { true }
+}
+
+struct TaskRowHover: NSViewRepresentable {
+    var changed: (Bool) -> Void
+    func makeNSView(context: Context) -> TaskRowHoverView { TaskRowHoverView() }
+    func updateNSView(_ view: TaskRowHoverView,context: Context) { view.changed = changed }
+}
+final class TaskRowHoverView: NSView {
+    var changed: ((Bool) -> Void)?
+    private var tracking: NSTrackingArea?
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(rect: bounds,options: [.activeAlways,.inVisibleRect,.mouseEnteredAndExited,.enabledDuringMouseDrag],owner: self,userInfo: nil)
+        tracking = area; addTrackingArea(area)
+    }
+    override func mouseEntered(with event: NSEvent) { changed?(true) }
+    override func mouseExited(with event: NSEvent) { changed?(false) }
+}
+
+struct CheckReminderSettings: View {
+    @Binding var check: CheckItem
+    @State private var minutes = 15.0
+    var body: some View { VStack(alignment: .leading,spacing: 14) {
+        Text(check.title).font(.headline).lineLimit(2)
+        Toggle("检查项提醒",isOn: Binding(get: { check.due != nil },set: { value in check.due = value ? Date().addingTimeInterval(3600) : nil; check.reminders = value ? [0] : nil }))
+        if check.due != nil {
+            DatePicker("日期与时间",selection: Binding(get: { check.due ?? Date() },set: { check.due = $0 }))
+            ForEach([0.0,300,900,1800,3600,86400],id: \.self) { offset in
+                Toggle(offset == 0 ? ZiloLanguage.text("到时提醒") : ZiloLanguage.format("提前 %lld 分钟",Int(offset / 60)),isOn: Binding(get: { (check.reminders ?? [0]).contains(offset) },set: { value in var offsets = check.reminders ?? [0]; offsets.removeAll { $0 == offset }; if value { offsets.append(offset) }; check.reminders = offsets }))
+            }
+            HStack { TextField("分钟",value: $minutes,format: .number).frame(width: 70); Button("添加提醒") { if minutes.isFinite && minutes > 0 { var offsets = check.reminders ?? [0]; if !offsets.contains(minutes * 60) { offsets.append(minutes * 60) }; check.reminders = offsets } } }
+            ForEach((check.reminders ?? []).filter { ![0.0,300,900,1800,3600,86400].contains($0) },id: \.self) { offset in HStack { Text(ZiloLanguage.format("提前 %lld 分钟",Int(offset / 60))); Spacer(); Button("移除") { check.reminders?.removeAll { $0 == offset } } } }
+        }
+    } }
 }

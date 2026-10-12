@@ -3,7 +3,9 @@ import CoreData
 import Combine
 import CloudKit
 import CryptoKit
+#if os(macOS)
 import AppKit
+#endif
 
 struct FieldVersion: Identifiable { var id: UUID; var owner: UUID; var kind: String; var field: String; var json: String; var timestamp: Date }
 final class Persistence {
@@ -20,7 +22,14 @@ final class Persistence {
     var onCloudEvent: ((String) -> Void)?
     init(inMemory: Bool = false, cloud: Bool = UserDefaults.standard.bool(forKey: "cloudEnabled") && Capability.cloudAvailable) {
         self.inMemory = inMemory
-        root = inMemory ? FileManager.default.temporaryDirectory.appendingPathComponent("OwnListTests-" + UUID().uuidString,isDirectory: true) : FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("OwnList", isDirectory: true)
+        #if DEBUG
+        let capturePath = ProcessInfo.processInfo.environment["ZILO_DATA_DIRECTORY"] ?? Bundle.main.object(forInfoDictionaryKey: "ZiloQADataDirectory") as? String
+        let captureDirectory = capturePath.map { URL(fileURLWithPath: $0,isDirectory: true) }
+        #else
+        let captureDirectory: URL? = nil
+        #endif
+        let cloud = cloud && captureDirectory == nil
+        root = inMemory ? FileManager.default.temporaryDirectory.appendingPathComponent("OwnListTests-" + UUID().uuidString,isDirectory: true) : captureDirectory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("OwnList", isDirectory: true)
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let model = NSManagedObjectModel(); let entity = NSEntityDescription(); entity.name = "FieldVersion"; entity.managedObjectClassName = "NSManagedObject"
         func attr(_ name: String, _ type: NSAttributeType) -> NSAttributeDescription { let a = NSAttributeDescription(); a.name = name; a.attributeType = type; a.isOptional = true; return a }
@@ -46,7 +55,14 @@ final class Persistence {
         observer = NotificationCenter.default.addObserver(forName: .NSPersistentStoreRemoteChange, object: nil, queue: .main) { [weak self] _ in self?.fieldCache.removeAll(); self?.cacheLoaded = false; self?.container.viewContext.refreshAllObjects(); self?.onChange?() }
         cloudObserver = NotificationCenter.default.addObserver(forName: NSPersistentCloudKitContainer.eventChangedNotification, object: nil, queue: .main) { [weak self] n in
             guard let event = n.userInfo?[NSPersistentCloudKitContainer.eventNotificationUserInfoKey] as? NSPersistentCloudKitContainer.Event else { return }
-            self?.onCloudEvent?(event.error.map { "同步失败：\(CloudMessage.describe($0))" } ?? (event.endDate == nil ? "正在同步…" : "已同步 · \(Date().formatted(date: .omitted, time: .shortened))")); if event.endDate != nil { self?.fieldCache.removeAll(); self?.cacheLoaded = false; self?.onChange?() }
+            let message: String
+            if let error = event.error { message = "同步失败：" + CloudMessage.describe(error) }
+            else if event.endDate == nil { message = event.type == .setup ? "正在连接 iCloud…" : "正在同步…" }
+            else if !event.succeeded { message = "同步失败：系统暂未完成同步，将自动重试" }
+            else if event.type == .setup { message = "iCloud 已连接 · 等待数据同步" }
+            else { message = "已同步 · " + Date().formatted(date: .omitted,time: .shortened) }
+            self?.onCloudEvent?(message)
+            if event.endDate != nil { self?.fieldCache.removeAll(); self?.cacheLoaded = false; self?.onChange?() }
         }
     }
     func versions(owner: UUID? = nil, kind: String? = nil) throws -> [FieldVersion] {
@@ -85,6 +101,12 @@ final class Persistence {
         }
         if !inTransaction { try container.viewContext.save() }; fieldCache[record.id] = previous
     }
+    func ensureDefaultCountdowns(started: Date = Date()) throws {
+        guard !inMemory, loadError == nil else { return }
+        let existing = Set(try load(Countdown.self).map(\.id))
+        let missing = Countdown.defaults(started: started).filter { !existing.contains($0.id) }
+        if !missing.isEmpty { try transaction { for item in missing { try save(item) } } }
+    }
     func saveBlob(path: String, data: Data) throws {
         let r = NSFetchRequest<NSManagedObject>(entityName: "AttachmentBlob"); r.predicate = NSPredicate(format: "path == %@",path); r.fetchLimit = 1
         guard try container.viewContext.fetch(r).isEmpty else { return }
@@ -107,23 +129,32 @@ final class Persistence {
         o.setValue(UUID(), forKey: "id"); o.setValue(version.owner, forKey: "owner"); o.setValue(version.kind, forKey: "kind"); o.setValue(version.field, forKey: "field"); o.setValue(version.json, forKey: "json"); o.setValue(Date(), forKey: "timestamp"); try container.viewContext.save(); fieldCache.removeValue(forKey: version.owner); cacheLoaded = false
     }
 }
-struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks: [TaskItem]; var lists: [TaskList]; var filters: [SavedFilter]; var habits: [Habit]; var focus: [FocusRecord]; var subscriptions: [CalendarSubscription]; var attachmentFiles: [String: Data]? = nil }
+struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks: [TaskItem]; var lists: [TaskList]; var filters: [SavedFilter]; var habits: [Habit]; var focus: [FocusRecord]; var subscriptions: [CalendarSubscription]; var attachmentFiles: [String: Data]? = nil; var countdowns: [Countdown]? = nil }
+#if os(macOS)
 @MainActor final class Store: ObservableObject {
     let persistence: Persistence
     @Published var tasks: [TaskItem] = []; @Published var lists: [TaskList] = []; @Published var filters: [SavedFilter] = []; @Published var habits: [Habit] = []; @Published var focus: [FocusRecord] = []; @Published var subscriptions: [CalendarSubscription] = []
+    @Published var countdowns: [Countdown] = []; @Published var activity: [ActivityEntry] = []
+    @Published var checkingSync = false
+    @Published var notificationTask: UUID?; @Published var notificationHabit: UUID?; @Published var notificationCountdown: UUID?; @Published var notificationModule: Module?
     @Published var error: String?; @Published var syncStatus = "本地保存"; @Published var selectedTask: UUID?
     private var backupTimer: Timer?
     private var undoStack: [Backup] = []; private var redoStack: [Backup] = []
     init(persistence: Persistence = Persistence()) {
         self.persistence = persistence
-        persistence.onChange = { [weak self] in Task { @MainActor in self?.reload() } }
-        persistence.onCloudEvent = { [weak self] message in Task { @MainActor in self?.syncStatus = message } }
-        reload(); if UserDefaults.standard.bool(forKey: "cloudEnabled") && Capability.cloudAvailable { syncStatus = "等待 iCloud 同步" }
-        if !persistence.inMemory && !UserDefaults.standard.bool(forKey: "didInitialize") { do { try persistence.save(TaskList(name: "学习", color: "blue", order: 0)); try persistence.save(TaskList(name: "工作", color: "green", order: 1)); try persistence.save(TaskList(name: "家庭生活", color: "orange", order: 2)); UserDefaults.standard.set(true, forKey: "didInitialize"); reload() } catch { self.error = error.localizedDescription } }
+        #if DEBUG
+        selectedTask = ZiloScreenshotData.seed(persistence)
+        #endif
+        persistence.onChange = { [weak self] in Task { @MainActor in self?.reload(); self?.reschedule() } }
+        persistence.onCloudEvent = { [weak self] message in Task { @MainActor in self?.syncStatus = message; if message.hasPrefix("同步失败") { self?.logActivity("同步失败",detail: message) } else if message.hasPrefix("已同步") { self?.logActivity("数据已同步",detail: message) } } }
+        if !persistence.inMemory, let data = try? Data(contentsOf: persistence.root.appendingPathComponent("Activity.json")) { activity = (try? JSONDecoder().decode([ActivityEntry].self,from: data)) ?? [] }
+        do { try persistence.ensureDefaultCountdowns(started: (try? persistence.load(TaskItem.self).map(\.created).min()) ?? Date()) } catch { self.error = error.localizedDescription }
+        reload(); reschedule(); if UserDefaults.standard.bool(forKey: "cloudEnabled") && Capability.cloudAvailable { syncStatus = "等待 iCloud 同步" }
+        if !persistence.inMemory && !UserDefaults.standard.bool(forKey: "didInitialize") { do { if lists.isEmpty { try persistence.save(TaskList(name: "学习", color: "blue", order: 0)); try persistence.save(TaskList(name: "工作", color: "green", order: 1)); try persistence.save(TaskList(name: "家庭生活", color: "orange", order: 2)) }; UserDefaults.standard.set(true, forKey: "didInitialize"); reload() } catch { self.error = error.localizedDescription } }
         if !persistence.inMemory { automaticBackup(); backupTimer = Timer.scheduledTimer(withTimeInterval: 3600,repeats: true) { [weak self] _ in Task { @MainActor in self?.automaticBackup() } } }
     }
     func reload() {
-        do { if let failure = persistence.loadError { throw ServiceError.message(failure) }; if !persistence.inMemory { try persistence.restoreBlobs() }; tasks = try persistence.load(TaskItem.self); lists = try persistence.load(TaskList.self); filters = try persistence.load(SavedFilter.self); habits = try persistence.load(Habit.self); focus = try persistence.load(FocusRecord.self); subscriptions = try persistence.load(CalendarSubscription.self); try migrateInlineDocumentImages() } catch { self.error = "读取数据失败：\(error.localizedDescription)" }
+        do { if let failure = persistence.loadError { throw ServiceError.message(failure) }; if !persistence.inMemory { try persistence.restoreBlobs() }; tasks = try persistence.load(TaskItem.self); lists = try persistence.load(TaskList.self); filters = try persistence.load(SavedFilter.self); habits = try persistence.load(Habit.self); focus = try persistence.load(FocusRecord.self); subscriptions = try persistence.load(CalendarSubscription.self); countdowns = try persistence.load(Countdown.self); try migrateInlineDocumentImages() } catch { self.error = "读取数据失败：\(error.localizedDescription)" }
         if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
         WidgetSnapshot.write(tasks: tasks, lists: lists) }
     }
@@ -131,12 +162,12 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         let deletedLists = Set(lists.filter(\.deleted).map(\.id))
         return deletedLists.count + tasks.filter { $0.deleted && $0.trashedWithList.map(deletedLists.contains) != true }.count
     }
-    var backup: Backup { Backup(tasks: tasks, lists: lists, filters: filters, habits: habits, focus: focus, subscriptions: subscriptions) }
+    var backup: Backup { Backup(tasks: tasks, lists: lists, filters: filters, habits: habits, focus: focus, subscriptions: subscriptions, countdowns: countdowns) }
     @discardableResult func save<T: ListRecord>(_ record: T, undoable: Bool = true) -> Bool {
         let before = undoable ? backup : nil
         do { var prepared = record
             if var task = record as? TaskItem, task.editingMode == .markdown, task.notes.contains("data:image/") { try externalizeDocumentImages(&task); prepared = task as! T }
-            try persistence.save(prepared); if let before { undoStack.append(before); if undoStack.count > 40 { undoStack.removeFirst() }; redoStack.removeAll() }; updatePublished(prepared); if !persistence.inMemory { if let task = prepared as? TaskItem { NotificationService.shared.schedule(task) }; if let habit = record as? Habit { NotificationService.shared.schedule(habit) } }; return true } catch { self.error = error.localizedDescription; return false }
+            try persistence.save(prepared); if let before { undoStack.append(before); if undoStack.count > 40 { undoStack.removeFirst() }; redoStack.removeAll() }; updatePublished(prepared); if !persistence.inMemory { if let task = prepared as? TaskItem { NotificationService.shared.schedule(task) }; if let habit = record as? Habit { NotificationService.shared.schedule(habit) }; if let day = record as? Countdown { NotificationService.shared.schedule(day) }; if let task = record as? TaskItem, undoable { logActivity(task.deleted ? "任务已删除" : task.completed ? "任务已完成" : "任务已更新",detail: task.title,owner: task.id) }; if let habit = record as? Habit { logActivity(habit.deleted ? "习惯已删除" : "习惯已更新",detail: habit.name,owner: habit.id) }; if let day = record as? Countdown { logActivity(day.deleted ? "纪念日已删除" : "纪念日已更新",detail: day.name,owner: day.id) }; if let focus = record as? FocusRecord { logActivity(focus.deleted ? "专注记录已删除" : "专注已记录",detail: "\(Int(focus.seconds / 60)) 分钟 · \(focus.mode)",owner: focus.id) } }; return true } catch { self.error = error.localizedDescription; return false }
     }
     /// Images use the existing attachment backup and CloudKit blob transport.
     func writeDocumentImage(_ bytes: Data,name: String = "图片.png") throws -> String {
@@ -203,7 +234,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
     private func updatePublished<T: ListRecord>(_ record: T) {
         func updated<R: ListRecord>(_ records: [R], _ record: R) -> [R] { var list = records; if let i = list.firstIndex(where: { $0.id == record.id }) { list[i] = record } else { list.append(record) }; return list }
         if let r = record as? TaskItem { tasks = updated(tasks,r); if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count); WidgetSnapshot.write(tasks: tasks,lists: lists) } }
-        if let r = record as? TaskList { lists = updated(lists,r) }; if let r = record as? SavedFilter { filters = updated(filters,r) }; if let r = record as? Habit { habits = updated(habits,r) }; if let r = record as? FocusRecord { focus = updated(focus,r) }; if let r = record as? CalendarSubscription { subscriptions = updated(subscriptions,r) }
+        if let r = record as? TaskList { lists = updated(lists,r) }; if let r = record as? SavedFilter { filters = updated(filters,r) }; if let r = record as? Habit { habits = updated(habits,r) }; if let r = record as? FocusRecord { focus = updated(focus,r) }; if let r = record as? CalendarSubscription { subscriptions = updated(subscriptions,r) }; if let r = record as? Countdown { countdowns = updated(countdowns,r) }
     }
     @discardableResult func deleteList(_ id: UUID) -> Bool {
         guard var list = lists.first(where: { $0.id == id && !$0.deleted }) else { return false }
@@ -250,6 +281,40 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
             return true
         } catch { self.error = error.localizedDescription; return false }
     }
+    @discardableResult func placeTask(_ source: UUID,relativeTo target: UUID,position: TaskPlacement.Position) -> Bool {
+        guard let changed = TaskPlacement.changes(tasks,source: source,target: target,position: position) else { return false }
+        return savePlacement(tasks: changed,lists: [])
+    }
+    @discardableResult func placeList(_ source: UUID,relativeTo target: UUID? = nil,after: Bool = false,folder: String? = nil) -> Bool {
+        guard let changed = TaskPlacement.listChanges(lists,source: source,target: target,after: after,folder: folder) else { return false }
+        return savePlacement(tasks: [],lists: changed)
+    }
+    @discardableResult func moveTaskTree(_ id: UUID,to listID: UUID?) -> Bool {
+        guard var root = tasks.first(where: { $0.id == id && !$0.deleted }), listID == nil || lists.contains(where: { $0.id == listID && !$0.deleted }) else { return false }
+        let descendants = TaskHierarchy.rows(root: root,tasks: tasks,collapsed: []).dropFirst().map(\.task)
+        root.parentID = nil; root.listID = listID; root.section = ""
+        let changed = [root] + descendants.map { original in var child = original; child.listID = listID; child.section = ""; return child }
+        return savePlacement(tasks: changed,lists: [])
+    }
+    private func savePlacement(tasks changedTasks: [TaskItem],lists changedLists: [TaskList]) -> Bool {
+        guard !changedTasks.isEmpty || !changedLists.isEmpty else { return true }
+        let before = backup
+        do {
+            try persistence.transaction {
+                for task in changedTasks { try persistence.save(task) }
+                for list in changedLists { try persistence.save(list) }
+            }
+            for task in changedTasks { updatePublished(task) }
+            for list in changedLists { updatePublished(list) }
+            groupUndo(before); redoStack.removeAll()
+            if !persistence.inMemory {
+                WidgetSnapshot.write(tasks: tasks,lists: lists)
+                for task in changedTasks { NotificationService.shared.schedule(task) }
+                DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
+            }
+            return true
+        } catch { self.error = error.localizedDescription; return false }
+    }
     func restoreTask(_ id: UUID) {
         guard let task = tasks.first(where: { $0.id == id && $0.deleted }) else { return }
         let before = backup
@@ -283,22 +348,23 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
     }
     private func cascadeDelete(_ id: UUID,deleted: Bool,visited: Set<UUID>) { for var child in tasks.filter({ $0.parentID == id && (deleted ? !$0.deleted : $0.trashedWithParent == id) }) { guard !visited.contains(child.id) else { continue }; child.deleted = deleted; child.trashedWithParent = deleted ? id : nil; save(child,undoable: false); cascadeDelete(child.id,deleted: deleted,visited: visited.union([child.id])) } }
     @discardableResult func add(_ input: String, listID: UUID? = nil, parentID: UUID? = nil, defaultDue: Date? = nil, section: String = "", starred: Bool = false) -> UUID? {
-        let parsed = QuickParser.parse(input); guard !parsed.title.isEmpty else { return nil }
-        var task = TaskItem(); task.documentMode = DocumentEditingMode.defaultMode(); task.title = parsed.title; task.due = parsed.due ?? defaultDue; task.section = section; task.starred = starred; task.tags = parsed.tags; task.priority = parsed.priority; task.listID = listID; task.parentID = parentID
+        let parsed = TaskCreationPreferences.parse(input); guard !parsed.title.isEmpty else { return nil }
+        var task = TaskItem(); task.documentMode = DocumentEditingMode.defaultMode(); task.title = parsed.title; task.due = parsed.due ?? defaultDue ?? TaskCreationPreferences.due(); task.section = section; task.starred = starred; task.tags = parsed.tags; task.priority = parsed.priority == 0 ? max(0,min(3,UserDefaults.standard.integer(forKey: "defaultPriority"))) : parsed.priority; task.listID = listID; task.parentID = parentID
         task.allDay = task.due.map { Calendar.current.component(.hour, from: $0) == 0 && Calendar.current.component(.minute, from: $0) == 0 } ?? true
-        if task.due != nil { task.reminders = [0] }; guard save(task) else { return nil }; selectedTask = task.id; return task.id
+        if task.due != nil { task.reminders = TaskCreationPreferences.reminders(allDay: task.allDay) }; guard save(task) else { return nil }; selectedTask = task.id; return task.id
     }
     func complete(_ id: UUID) {
         guard var task = tasks.first(where: { $0.id == id }) else { return }
         let before = backup; task.completed.toggle(); task.completedAt = task.completed ? Date() : nil; task.checks = task.checks.map { var c = $0; c.done = task.completed; return c }; save(task)
+        if task.completed && !persistence.inMemory && UserDefaults.standard.bool(forKey: "completionSound") { NSSound(named: "Pop")?.play() }
         completeChildren(task.id,completed: task.completed,visited: [task.id])
-        if task.repeatRule.anchor == nil { task.repeatRule.anchor = task.due }; if task.completed, let due = task.due, let next = task.repeatRule.next(after: due) { var nextTask = task; if let count = nextTask.repeatRule.remainingCount { nextTask.repeatRule.remainingCount = count - 1 }; nextTask.id = UUID(); nextTask.sourceID = nil; nextTask.completed = false; nextTask.completedAt = nil; nextTask.due = next; nextTask.created = Date(); if let start = task.start { nextTask.start = next.addingTimeInterval(start.timeIntervalSince(due)) }; nextTask.checks = task.checks.map { var c = $0; c.done = false; return c }; save(nextTask, undoable: false)
+        if task.repeatRule.anchor == nil { task.repeatRule.anchor = task.due }; if task.completed, let due = task.due, let next = task.repeatRule.next(after: due) { var nextTask = task; if let count = nextTask.repeatRule.remainingCount { nextTask.repeatRule.remainingCount = count - 1 }; nextTask.id = UUID(); nextTask.sourceID = nil; nextTask.completed = false; nextTask.completedAt = nil; nextTask.due = next; nextTask.created = Date(); if let start = task.start { nextTask.start = next.addingTimeInterval(start.timeIntervalSince(due)) }; nextTask.checks = task.checks.map { var c = $0; c.done = false; c.due = c.due?.addingTimeInterval(next.timeIntervalSince(due)); return c }; save(nextTask, undoable: false)
             cloneChildren(from: id,to: nextTask.id,asTemplate: false,dateShift: next.timeIntervalSince(due),visited: [id])
             if !undoStack.isEmpty { undoStack[undoStack.count - 1] = before }
         }
     }
     @discardableResult func duplicate(_ id: UUID,asTemplate: Bool = false) -> UUID? { guard var task = tasks.first(where: { $0.id == id }) else { return nil }; let before = backup; let oldID = task.id; task.id = UUID(); task.parentID = nil; task.sourceID = nil; task.completed = false; task.completedAt = nil; task.created = Date(); task.isTemplate = asTemplate; task.checks = task.checks.map { var c = $0; c.done = false; return c }; save(task); cloneChildren(from: oldID,to: task.id,asTemplate: asTemplate,dateShift: 0,visited: [oldID]); groupUndo(before); selectedTask = task.id; return task.id }
-    private func cloneChildren(from source: UUID,to destination: UUID,asTemplate: Bool,dateShift: Double,visited: Set<UUID>) { let originals = tasks.filter { $0.parentID == source && !$0.deleted }; for var child in originals { let oldID = child.id; guard !visited.contains(oldID) else { continue }; child.id = UUID(); child.parentID = destination; child.sourceID = nil; child.completed = false; child.completedAt = nil; child.isTemplate = asTemplate; child.due = child.due?.addingTimeInterval(dateShift); child.start = child.start?.addingTimeInterval(dateShift); child.checks = child.checks.map { var c = $0; c.done = false; return c }; save(child,undoable: false); cloneChildren(from: oldID,to: child.id,asTemplate: asTemplate,dateShift: dateShift,visited: visited.union([oldID])) } }
+    private func cloneChildren(from source: UUID,to destination: UUID,asTemplate: Bool,dateShift: Double,visited: Set<UUID>) { let originals = tasks.filter { $0.parentID == source && !$0.deleted }; for var child in originals { let oldID = child.id; guard !visited.contains(oldID) else { continue }; child.id = UUID(); child.parentID = destination; child.sourceID = nil; child.completed = false; child.completedAt = nil; child.isTemplate = asTemplate; child.due = child.due?.addingTimeInterval(dateShift); child.start = child.start?.addingTimeInterval(dateShift); child.checks = child.checks.map { var c = $0; c.done = false; c.due = c.due?.addingTimeInterval(dateShift); return c }; save(child,undoable: false); cloneChildren(from: oldID,to: child.id,asTemplate: asTemplate,dateShift: dateShift,visited: visited.union([oldID])) } }
     private func completeChildren(_ id: UUID,completed: Bool,visited: Set<UUID>) { for var child in tasks.filter({ $0.parentID == id && !$0.deleted }) { guard !visited.contains(child.id) else { continue }; child.completed = completed; child.completedAt = completed ? Date() : nil; child.checks = child.checks.map { var check = $0; check.done = completed; return check }; save(child,undoable: false); completeChildren(child.id,completed: completed,visited: visited.union([child.id])) } }
     func move(_ ids: Set<UUID>, to list: UUID?) { let before = backup; for id in ids { mutate(id) { $0.listID = list } }; groupUndo(before) }
     func groupUndo(_ before: Backup) { undoStack = Array(undoStack.prefix(while: { $0.created < before.created })); undoStack.append(before) }
@@ -308,10 +374,30 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         do {
             try restoreFiles(data.attachmentFiles ?? [:])
             func applyRecords<T: ListRecord>(_ old: [T], _ new: [T]) throws { for var r in old where !new.contains(where: { $0.id == r.id }) { r.deleted = true; try persistence.save(r) }; for r in new { try persistence.save(r) } }
-            try applyRecords(tasks,data.tasks); try applyRecords(lists,data.lists); try applyRecords(filters,data.filters); try applyRecords(habits,data.habits); try applyRecords(focus,data.focus); try applyRecords(subscriptions,data.subscriptions); reload(); reschedule()
+            try applyRecords(tasks,data.tasks); try applyRecords(lists,data.lists); try applyRecords(filters,data.filters); try applyRecords(habits,data.habits); try applyRecords(focus,data.focus); try applyRecords(subscriptions,data.subscriptions); try applyRecords(countdowns,data.countdowns ?? []); reload(); reschedule()
         } catch { self.error = error.localizedDescription }
     }
-    func reschedule() { guard !persistence.inMemory else { return }; for task in tasks { NotificationService.shared.schedule(task) }; for habit in habits { NotificationService.shared.schedule(habit) } }
+    func reschedule() { guard !persistence.inMemory else { return }; for task in tasks { NotificationService.shared.schedule(task) }; for habit in habits { NotificationService.shared.schedule(habit) }; for day in countdowns { NotificationService.shared.schedule(day) } }
+    func logActivity(_ title: String, detail: String, owner: UUID? = nil) {
+        guard !persistence.inMemory else { return }
+        if let last = activity.first, last.title == title, last.detail == detail, last.owner == owner, Date().timeIntervalSince(last.date) < 60 { return }
+        activity.insert(ActivityEntry(title: title,detail: detail,owner: owner),at: 0); activity = Array(activity.prefix(200))
+        do { try JSONEncoder().encode(activity).write(to: persistence.root.appendingPathComponent("Activity.json"),options: .atomic) } catch { self.error = "活动记录保存失败：\(error.localizedDescription)" }
+    }
+    func checkSync() async {
+        guard !checkingSync else { return }; checkingSync = true; defer { checkingSync = false }
+        guard Capability.cloudAvailable else { syncStatus = "此构建未启用 iCloud 同步"; return }
+        guard UserDefaults.standard.bool(forKey: "cloudEnabled") else { syncStatus = "iCloud 同步已关闭 · 本地保存"; return }
+        guard persistence.container is NSPersistentCloudKitContainer else { syncStatus = "重启 Zilo 后启用 iCloud 同步"; return }
+        do {
+            let account = try await CKContainer(identifier: "iCloud.com.gaoluchuan.ownlist").accountStatus()
+            guard account == .available else { syncStatus = account == .noAccount ? "请在系统设置中登录 iCloud" : "iCloud 账户暂不可用"; return }
+            try persistence.container.viewContext.save()
+            // Re-read imported data; the CloudKit container manages transfer and retries.
+            persistence.container.viewContext.refreshAllObjects(); reload(); reschedule()
+            if !syncStatus.hasPrefix("同步失败"), !syncStatus.hasPrefix("已同步") { syncStatus = "iCloud 已连接 · 等待系统同步" }
+        } catch { syncStatus = "同步失败：" + CloudMessage.describe(error); logActivity("同步失败",detail: syncStatus) }
+    }
     func restoreFiles(_ files: [String: Data]) throws {
         for (path, data) in files { guard path.hasPrefix("Attachments/"), !path.contains(".."), !path.hasPrefix("/") else { throw ServiceError.message("备份包含非法附件路径") }; let url = persistence.root.appendingPathComponent(path); try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),withIntermediateDirectories: true); try data.write(to: url,options: .atomic); try persistence.saveBlob(path: path,data: data) }
     }
@@ -331,6 +417,8 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
     }
 }
 
+#endif
+
 // Keep system diagnostics out of the ordinary navigation while preserving actionable guidance.
 enum CloudMessage {
     static func describe(_ error: Error) -> String {
@@ -347,3 +435,38 @@ enum CloudMessage {
         return "同步暂不可用，请重新启动应用重试；本机数据仍会保存。"
     }
 }
+
+#if DEBUG
+/// Real persisted sample records for isolated screenshot builds. Never runs in Release.
+enum ZiloScreenshotData {
+    static func seed(_ persistence: Persistence) -> UUID? {
+        guard ProcessInfo.processInfo.environment["ZILO_SCREENSHOTS"] == "1",
+              ProcessInfo.processInfo.environment["ZILO_DATA_DIRECTORY"] != nil,
+              (try? persistence.load(TaskItem.self).isEmpty) == true else { return nil }
+        let english = ZiloLanguage.locale.identifier.hasPrefix("en")
+        func label(_ zh: String,_ en: String) -> String { english ? en : zh }
+        let day = Calendar.current.startOfDay(for: Date())
+        let work = TaskList(name: label("工作","Work"),color: "blue",order: 0)
+        let life = TaskList(name: label("生活","Personal"),color: "green",order: 1)
+        let learning = TaskList(name: label("学习","Learning"),color: "orange",order: 2)
+        var plan = TaskItem(); plan.title = label("准备产品发布","Plan the product launch"); plan.listID = work.id; plan.due = day; plan.priority = 2; plan.order = 0; plan.documentMode = .markdown
+        plan.notes = english ? "## A thoughtful release\n\nKeep the important things in one place.\n\n### Release checklist\n- Review the app experience\n- Capture both interface languages\n- Publish the latest Mac download\n\n### A small piece of code\n```swift\nlet message = \"Hello, Zilo\"\nprint(message)\n```" : "## 认真准备每一次发布\n\n把重要的事情，放在一个地方。\n\n### 发布清单\n- 检查应用体验\n- 采集中英文真实界面\n- 发布最新 Mac 安装包\n\n### 一小段代码\n```swift\nlet message = \"你好，Zilo\"\nprint(message)\n```"
+        var child = TaskItem(); child.title = label("完成截图与说明","Finalize screenshots and copy"); child.parentID = plan.id; child.listID = work.id; child.order = 1
+        var finished = TaskItem(); finished.title = label("确认发布清单","Review the release checklist"); finished.parentID = plan.id; finished.listID = work.id; finished.order = 0; finished.completed = true; finished.completedAt = Date()
+        var review = TaskItem(); review.title = label("回顾本周计划","Review the weekly plan"); review.notes = label("留一点时间，看看进展和下一步。","Make time to reflect and choose the next step."); review.listID = work.id; review.due = day; review.order = 2
+        var read = TaskItem(); read.title = label("阅读 20 分钟","Read for 20 minutes"); read.listID = learning.id; read.due = day; read.order = 3; read.tags = [label("阅读","reading")]
+        var walk = TaskItem(); walk.title = label("傍晚散步","Take an evening walk"); walk.listID = life.id; walk.due = day; walk.order = 4
+        var habit = Habit(name: label("每天阅读","Read every day")); habit.emoji = "📚"; habit.logs = [Day.key(day):1]
+        var countdown = Countdown(name: label("下次旅行","Next trip"),date: Calendar.current.date(byAdding: .day,value: 18,to: day)!); countdown.emoji = "✈️"
+        do {
+            try persistence.transaction {
+                for list in [work,life,learning] { try persistence.save(list) }
+                for task in [plan,child,finished,review,read,walk] { try persistence.save(task) }
+                try persistence.save(habit); try persistence.save(countdown)
+            }
+            UserDefaults.standard.set(true,forKey: "didInitialize")
+            return plan.id
+        } catch { return nil }
+    }
+}
+#endif

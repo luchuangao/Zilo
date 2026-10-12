@@ -9,7 +9,8 @@ import WidgetKit
 import CryptoKit
 
 final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
-    static let shared = NotificationService(); var onComplete: ((UUID) -> Void)?
+    static let shared = NotificationService(); var onComplete: ((UUID) -> Void)?; var onCompleteCheck: ((UUID,UUID) -> Void)?;
+    private var taskGenerations: [UUID: Int] = [:]; var onOpen: (([AnyHashable:Any]) -> Void)?
     func configure() {
         let center = UNUserNotificationCenter.current(); center.delegate = self
         let snooze = UNNotificationAction(identifier: "snooze", title: "10 分钟后提醒", options: [])
@@ -17,59 +18,87 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
         center.setNotificationCategories([UNNotificationCategory(identifier: "task", actions: [done,snooze], intentIdentifiers: [])])
     }
     func request() async throws -> Bool { try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert,.badge,.sound]) }
-    func schedule(_ task: TaskItem) {
-        let center = UNUserNotificationCenter.current(); let ids = (0..<32).map { "\(task.id)-\($0)" }; center.removePendingNotificationRequests(withIdentifiers: ids)
-        guard !task.deleted && !task.completed && !task.isTemplate, let due = task.due else { return }
-        for (i, offset) in task.reminders.prefix(32).enumerated() {
-            let date = due.addingTimeInterval(-offset); guard date > Date() else { continue }
-            let c = UNMutableNotificationContent(); c.title = task.title; c.body = task.notes; c.sound = .default; c.categoryIdentifier = "task"; c.userInfo = ["taskID": task.id.uuidString]
-            let trigger = UNCalendarNotificationTrigger(dateMatching: Calendar.current.dateComponents([.year,.month,.day,.hour,.minute,.second], from: date), repeats: false)
-            center.add(UNNotificationRequest(identifier: "\(task.id)-\(i)", content: c, trigger: trigger))
+    @MainActor func schedule(_ task: TaskItem) {
+        let center = UNUserNotificationCenter.current()
+        let generation = (taskGenerations[task.id] ?? 0) + 1; taskGenerations[task.id] = generation
+        Task { @MainActor in
+            let pending = await center.pendingNotificationRequests()
+            guard taskGenerations[task.id] == generation else { return }
+            center.removePendingNotificationRequests(withIdentifiers: pending.filter { $0.identifier.hasPrefix(task.id.uuidString + "-") }.map(\.identifier))
+            guard UserDefaults.standard.object(forKey: "taskNotifications") as? Bool != false else { return }
+            for reminder in task.plannedReminders() {
+                guard taskGenerations[task.id] == generation else { return }
+                let c = UNMutableNotificationContent(); c.title = reminder.title; c.body = reminder.body; c.sound = UserDefaults.standard.object(forKey: "notificationSound") as? Bool == false ? nil : .default; c.categoryIdentifier = "task"; c.userInfo = ["taskID":task.id.uuidString]
+                if let checkID = reminder.checkID { c.userInfo["checkID"] = checkID.uuidString }
+                let trigger = UNCalendarNotificationTrigger(dateMatching: Calendar.current.dateComponents([.year,.month,.day,.hour,.minute,.second],from: reminder.date),repeats: false)
+                try? await center.add(UNNotificationRequest(identifier: reminder.id,content: c,trigger: trigger))
+            }
         }
     }
     func schedule(_ habit: Habit) {
         let center = UNUserNotificationCenter.current(); center.removePendingNotificationRequests(withIdentifiers: (1...7).map { "habit-\(habit.id)-\($0)" })
-        guard !habit.deleted, habit.reminderHour >= 0 else { return }
-        for weekday in habit.weekdays { let c = UNMutableNotificationContent(); c.title = "\(habit.emoji) \(habit.name)"; c.body = "今天的习惯目标：\(habit.goal)"; c.sound = .default; center.add(UNNotificationRequest(identifier: "habit-\(habit.id)-\(weekday)", content: c, trigger: UNCalendarNotificationTrigger(dateMatching: DateComponents(hour: habit.reminderHour, minute: 0, weekday: weekday), repeats: true))) }
+        guard UserDefaults.standard.object(forKey: "habitNotifications") as? Bool != false, !habit.deleted, habit.reminderHour >= 0 else { return }
+        for weekday in habit.weekdays { let c = UNMutableNotificationContent(); c.title = "\(habit.emoji) \(habit.name)"; c.body = "今天的习惯目标：\(habit.goal)"; c.userInfo = ["habitID":habit.id.uuidString]; c.sound = UserDefaults.standard.object(forKey: "notificationSound") as? Bool == false ? nil : .default; center.add(UNNotificationRequest(identifier: "habit-\(habit.id)-\(weekday)", content: c, trigger: UNCalendarNotificationTrigger(dateMatching: DateComponents(hour: habit.reminderHour, minute: 0, weekday: weekday), repeats: true))) }
     }
-    func focusDeadline(_ date: Date,phase: String) { let center = UNUserNotificationCenter.current(); center.removePendingNotificationRequests(withIdentifiers: ["focus-deadline"]); let c = UNMutableNotificationContent(); c.title = phase == "专注" ? "专注完成，休息一下" : "休息结束，开始下一轮专注"; c.sound = .default; center.add(UNNotificationRequest(identifier: "focus-deadline",content: c,trigger: UNTimeIntervalNotificationTrigger(timeInterval: max(1,date.timeIntervalSinceNow),repeats: false))) }
+    func schedule(_ day: Countdown) {
+        let center = UNUserNotificationCenter.current()
+        let ids = (0..<4).map { "countdown-\(day.id)-\($0)" }; center.removePendingNotificationRequests(withIdentifiers: ids)
+        guard UserDefaults.standard.object(forKey: "countdownNotifications") as? Bool != false else { return }
+        for (index,date) in day.reminders().enumerated() {
+            let c = UNMutableNotificationContent(); c.title = "\(day.emoji) \(day.name)"
+            c.body = day.reminderDays == 0 ? "今天是\(day.name)" : "还有 \(day.reminderDays) 天"; c.userInfo = ["countdownID":day.id.uuidString]
+            c.sound = UserDefaults.standard.object(forKey: "notificationSound") as? Bool == false ? nil : .default
+            center.add(UNNotificationRequest(identifier: ids[index],content: c,trigger: UNCalendarNotificationTrigger(dateMatching: Calendar.current.dateComponents([.year,.month,.day,.hour,.minute],from: date),repeats: false)))
+        }
+    }
+    func focusDeadline(_ date: Date,phase: String) { let center = UNUserNotificationCenter.current(); center.removePendingNotificationRequests(withIdentifiers: ["focus-deadline"]); guard UserDefaults.standard.object(forKey: "focusNotifications") as? Bool != false else { return }; let c = UNMutableNotificationContent(); c.userInfo = ["focus":true]; c.title = phase == "专注" ? "专注完成，休息一下" : "休息结束，开始下一轮专注"; c.sound = UserDefaults.standard.object(forKey: "notificationSound") as? Bool == false ? nil : .default; center.add(UNNotificationRequest(identifier: "focus-deadline",content: c,trigger: UNTimeIntervalNotificationTrigger(timeInterval: max(1,date.timeIntervalSinceNow),repeats: false))) }
     func cancelFocusDeadline() { UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["focus-deadline"]) }
-    func notify(_ title: String) { let c = UNMutableNotificationContent(); c.title = title; c.sound = .default; UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil)) }
+    func notify(_ title: String) { let c = UNMutableNotificationContent(); c.title = title; c.body = "任务、习惯、专注和纪念日提醒已接入系统通知。"; c.sound = UserDefaults.standard.object(forKey: "notificationSound") as? Bool == false ? nil : .default; UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil)) }
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) { completionHandler([.banner,.sound]) }
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         if let raw = response.notification.request.content.userInfo["taskID"] as? String, let id = UUID(uuidString: raw) {
-            if response.actionIdentifier == "done" { DispatchQueue.main.async { self.onComplete?(id) } }
+            if response.actionIdentifier == "done" { DispatchQueue.main.async { if let raw = response.notification.request.content.userInfo["checkID"] as? String,let check = UUID(uuidString: raw) { self.onCompleteCheck?(id,check) } else { self.onComplete?(id) } } }
             if response.actionIdentifier == "snooze" { let c = response.notification.request.content.mutableCopy() as! UNMutableNotificationContent; center.add(UNNotificationRequest(identifier: "\(id)-0", content: c, trigger: UNTimeIntervalNotificationTrigger(timeInterval: 600, repeats: false))) }
-        }; completionHandler()
+        }; if response.actionIdentifier == UNNotificationDefaultActionIdentifier { DispatchQueue.main.async { self.onOpen?(response.notification.request.content.userInfo) } }; completionHandler()
     }
 }
 @MainActor final class FocusTimer: ObservableObject {
     @Published var running = false; @Published var remaining: Double = 1500; @Published var elapsed: Double = 0
     @Published var minutes = 25; @Published var breakMinutes = 5; @Published var longBreakMinutes = 15; @Published var mode = "番茄"; @Published var phase = "专注"; @Published var taskID: UUID?; @Published var rounds = 0
-    private var started: Date?; private var deadline: Date?; private var prior: Double = 0; private var ticker: Timer?
-    var onRecord: ((FocusRecord) -> Void)?
-    init() {
-        minutes = UserDefaults.standard.integer(forKey: "focusMinutes"); if minutes == 0 { minutes = 25 }
-        if let data = UserDefaults.standard.data(forKey: "activeFocus"), let state = try? JSONDecoder().decode(Session.self, from: data) { mode = state.mode; phase = state.phase; started = state.started; deadline = state.deadline; prior = state.prior; running = state.running; taskID = state.taskID; rounds = state.rounds }
-        ticker = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in Task { @MainActor in self?.tick() } }; tick()
+    private var sessionStarted: Date?; private var started: Date?; private var deadline: Date?; private var prior: Double = 0; private var ticker: Timer?
+    private let defaults: UserDefaults; private let now: () -> Date; private let notifications: Bool
+    private var pending: [FocusRecord] = []
+    var onRecord: ((FocusRecord) -> Void)? { didSet { if let onRecord { let records = pending; pending.removeAll(); records.forEach(onRecord) } } }
+    init(defaults: UserDefaults = .standard, now: @escaping () -> Date = Date.init, notifications: Bool = true) {
+        self.defaults = defaults; self.now = now; self.notifications = notifications
+        minutes = max(1,defaults.object(forKey: "focusMinutes") as? Int ?? 25)
+        breakMinutes = max(1,defaults.object(forKey: "breakMinutes") as? Int ?? 5)
+        longBreakMinutes = max(1,defaults.object(forKey: "longBreakMinutes") as? Int ?? 15)
+        if let data = defaults.data(forKey: "activeFocus"), let state = try? JSONDecoder().decode(Session.self,from: data) {
+            mode = state.mode; phase = state.phase; started = state.started; deadline = state.deadline; prior = state.prior; elapsed = prior; running = state.running; taskID = state.taskID; rounds = state.rounds; sessionStarted = state.sessionStarted ?? state.started?.addingTimeInterval(-state.prior)
+        }
+        if notifications { ticker = Timer.scheduledTimer(withTimeInterval: 1,repeats: true) { [weak self] _ in Task { @MainActor in self?.tick() } } }; tick()
     }
-    struct Session: Codable { var mode: String; var phase: String; var started: Date?; var deadline: Date?; var prior: Double; var running: Bool; var taskID: UUID?; var rounds: Int }
-    func persist() { UserDefaults.standard.set(try? JSONEncoder().encode(Session(mode: mode, phase: phase, started: started, deadline: deadline, prior: running ? prior : elapsed, running: running, taskID: taskID, rounds: rounds)), forKey: "activeFocus") }
+    deinit { ticker?.invalidate() }
+    struct Session: Codable { var mode: String; var phase: String; var started: Date?; var deadline: Date?; var prior: Double; var running: Bool; var taskID: UUID?; var rounds: Int; var sessionStarted: Date? }
+    func persist() { defaults.set(try? JSONEncoder().encode(Session(mode: mode,phase: phase,started: started,deadline: deadline,prior: running ? prior : elapsed,running: running,taskID: taskID,rounds: rounds,sessionStarted: sessionStarted)),forKey: "activeFocus") }
+    func saveDurations() { defaults.set(minutes,forKey: "focusMinutes"); defaults.set(breakMinutes,forKey: "breakMinutes"); defaults.set(longBreakMinutes,forKey: "longBreakMinutes"); if !running && elapsed == 0 { remaining = phaseLength }; persist() }
+    func changeMode(_ value: String) { guard !running && elapsed == 0 else { return }; mode = value; phase = "专注"; prior = 0; deadline = nil; remaining = phaseLength; persist() }
     var phaseLength: Double { Double((phase == "专注" ? minutes : rounds % 4 == 0 ? longBreakMinutes : breakMinutes) * 60) }
-    func start() { started = Date(); running = true; if mode == "番茄" { let length = phaseLength; deadline = Date().addingTimeInterval(max(1,length - prior)); NotificationService.shared.focusDeadline(deadline!,phase: phase) }; persist(); tick() }
-    func pause() { NotificationService.shared.cancelFocusDeadline(); tick(); prior = elapsed; running = false; started = nil; persist() }
+    func start() { guard !running else { return }; started = now(); if sessionStarted == nil { sessionStarted = started }; running = true; if mode == "番茄" { deadline = now().addingTimeInterval(max(1,phaseLength - prior)); rescheduleNotification() }; persist(); tick() }
+    func rescheduleNotification() { guard notifications else { return }; if running,mode == "番茄",let deadline { NotificationService.shared.focusDeadline(deadline,phase: phase) } else { NotificationService.shared.cancelFocusDeadline() } }
+    func pause() { tick(); guard running else { return }; prior = elapsed; running = false; started = nil; deadline = nil; rescheduleNotification(); persist() }
     func tick() {
         guard running, let started else { if mode == "番茄" { remaining = max(0,phaseLength - prior) }; return }
-        elapsed = prior + Date().timeIntervalSince(started); remaining = deadline.map { max(0,$0.timeIntervalSinceNow) } ?? elapsed
+        elapsed = prior + max(0,now().timeIntervalSince(started)); remaining = deadline.map { max(0,$0.timeIntervalSince(now())) } ?? elapsed
         if mode == "番茄", remaining <= 0 {
-            if phase == "专注" { elapsed = min(elapsed,phaseLength); record(); rounds += 1; phase = "休息"; if UserDefaults.standard.object(forKey: "focusSound") as? Bool != false { NSSound(named: "Glass")?.play() } }
-            else { phase = "专注" }
-            running = false; prior = 0; elapsed = 0; self.started = nil; deadline = nil; persist()
+            if phase == "专注" { elapsed = min(elapsed,phaseLength); record(completed: true); rounds += 1; phase = "休息"; if notifications && defaults.object(forKey: "focusSound") as? Bool != false { NSSound(named: "Glass")?.play() } } else { phase = "专注" }
+            running = false; prior = 0; elapsed = 0; self.started = nil; sessionStarted = nil; deadline = nil; remaining = phaseLength; persist()
         }
     }
-    func stop() { NotificationService.shared.cancelFocusDeadline(); if phase == "专注" && elapsed > 0 { record() }; running = false; started = nil; deadline = nil; prior = 0; elapsed = 0; phase = "专注"; remaining = Double(minutes * 60); persist() }
-    private func record() { onRecord?(FocusRecord(taskID: taskID, started: Date().addingTimeInterval(-elapsed), seconds: elapsed, mode: mode)) }
-    var display: String { let seconds = Int(mode == "番茄" ? remaining : elapsed); return String(format: "%02d:%02d", seconds / 60, seconds % 60) }
+    func stop() { tick(); if phase == "专注" && elapsed > 0 { record(completed: false) }; running = false; started = nil; sessionStarted = nil; deadline = nil; prior = 0; elapsed = 0; phase = "专注"; remaining = Double(minutes * 60); rescheduleNotification(); persist() }
+    private func record(completed: Bool) { let value = FocusRecord(taskID: taskID,started: sessionStarted ?? now().addingTimeInterval(-elapsed),seconds: elapsed,mode: mode,completedPomodoro: completed && mode == "番茄",ended: now()); if let onRecord { onRecord(value) } else { pending.append(value) } }
+    var display: String { let seconds = max(0,Int(mode == "番茄" ? remaining : elapsed)); return String(format: "%02d:%02d",seconds / 60,seconds % 60) }
 }
 @MainActor final class CalendarService: ObservableObject {
     let eventStore = EKEventStore(); @Published var events: [ExternalEvent] = []; @Published var message = ""; @Published var calendars: [EKCalendar] = []
@@ -154,7 +183,7 @@ enum WidgetSnapshot {
     static func updateBadge(_ count: Int) { NSApp?.dockTile.badgeLabel = count == 0 ? nil : String(count) }
     static func panel<V: View>(title: String, view: V, floating: Bool = true, size: NSSize = NSSize(width: 420,height: 450)) { let window = NSPanel(contentRect: NSRect(origin: .zero,size: size),styleMask: [.titled,.closable,.resizable,.nonactivatingPanel],backing: .buffered,defer: false); window.title = title; window.contentView = NSHostingView(rootView: view); window.level = floating ? .floating : .normal; window.isReleasedWhenClosed = false; window.center(); window.makeKeyAndOrderFront(nil); windows.append(window) }
     static func registerHotkey() {
-        if let hotKey { UnregisterEventHotKey(hotKey) }
+        if let hotKey { UnregisterEventHotKey(hotKey); self.hotKey = nil }; guard UserDefaults.standard.object(forKey: "quickEnabled") as? Bool != false else { return }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),eventKind: UInt32(kEventHotKeyPressed))
         if !installedHandler { InstallEventHandler(GetApplicationEventTarget(), { _,_,_ in DispatchQueue.main.async { DesktopBridge.quickAction?() }; return noErr },1,&spec,nil,nil); installedHandler = true }
         let key = UInt32(UserDefaults.standard.object(forKey: "quickCode") as? Int ?? (UserDefaults.standard.integer(forKey: "quickKey") == 1 ? kVK_ANSI_Q : kVK_ANSI_A)); let modifiers = UInt32(UserDefaults.standard.object(forKey: "quickModifiers") as? Int ?? (cmdKey | optionKey))

@@ -49,7 +49,7 @@ ICS 订阅支持事件、时区、常用日/周/月/年重复以及排除日期�
 - `scripts/build-local.sh`：生成通用架构本地应用，采用本地临时签名，iCloud 和共享扩展不可用。
 - `scripts/archive-release.sh`：使用 Xcode 已登录的开发者账号归档、签名并提交公证。设置 `OWNLIST_TEAM`；Apple 完成公证后再执行脚本提供的导出命令。不要把密码写入源码。
 
-CloudKit 容器：`iCloud.com.gaoluchuan.ownlist`。共享容器：`VFDQL6Z55P.com.gaoluchuan.ownlist`。当前正式应用已签名及公证，但运行时创建 CloudKit 区域失败，尚未完成生产 schema 部署及双机验收。iCloud 不可用时本地数据仍保留；在此问题解决前请用本地模式，并保留手动备份。生产分发前需要把 CloudKit 开发 schema 部署到生产环境。
+CloudKit 容器：`iCloud.com.gaoluchuan.ownlist`。共享容器：`VFDQL6Z55P.com.gaoluchuan.ownlist`。2026-10-11 已初始化并部署 CloudKit 正式 schema，当前 Mac 的正式应用已完成实际导入和上传，并显示“已同步”。第二台 Mac 的离线合并、删除与附件同步尚未验收；请保留手动备份。iCloud 暂不可用时本地数据仍保留。
 
 ## 快捷操作
 
@@ -98,7 +98,7 @@ ownlist://task?id=任务UUID
 
 ### 文档贴图、Markdown 文件与导出（2026-10-07）
 
-正文 ⌘V 支持截图、图片和 Finder 复制的 Markdown 文件；也可从正文「＋」插入。读取 Markdown 配套图片时按提示选择其所在文件夹。任务更多菜单「导出文档」支持 Word（.docx）、PDF 和 Markdown（.md）；带图 Markdown 导出为完整文件夹，请一起搬移。图文正文随本机保存，较大正文使用二进制记录；跨 Mac 同步仍待 CloudKit 生产配置及双机验收。详细范围见《文档贴图与导出说明》。
+正文 ⌘V 支持截图、图片和 Finder 复制的 Markdown 文件；也可从正文「＋」插入。读取 Markdown 配套图片时按提示选择其所在文件夹。任务更多菜单「导出文档」支持 Word（.docx）、PDF 和 Markdown（.md）；带图 Markdown 导出为完整文件夹，请一起搬移。图文正文随本机保存，较大正文使用二进制记录；CloudKit 正式结构已部署，跨 Mac 图文同步仍待双机验收。详细范围见《文档贴图与导出说明》。
 
 ### UI 与颜色调整（2026-10-07）
 
@@ -142,3 +142,11 @@ Markdown 编辑支持回车保留换行、列表/引用自动续写、Tab 缩进
 ## 文档一致性与思维导图
 
 统一 Markdown 预览、富文本转换与导出，保留表格、嵌套列表、代码语言和语法高亮。文档支持离线思维导图，在正文“＋”或右下角“…”中插入与编辑，支持 Word/PDF 图片导出与 Markdown 源码导出。详见 [使用与验证说明](文档一致性与思维导图说明.md)。
+
+## 专注、习惯、倒数纪念日与通知（构建 30）
+
+番茄专注采用计时器与记录双栏，支持正计时、暂停恢复、关联任务和补记。习惯支持每周打卡、目标次数和历史补记。倒数纪念日支持分类、每年重复、置顶和提前提醒。左侧底部提供同步状态与通知/活动入口，点击提醒可打开对应内容。详情与验收范围见《专注习惯纪念日与同步通知优化说明》。
+
+## iPhone 版
+
+原生 iPhone 工程为 `ZiloMobile.xcodeproj`（iOS 17+），使用 `ZiloMobile` Scheme。功能、数据兼容和真机签名要求见 [iPhone版开发说明](iPhone版开发说明.md)。

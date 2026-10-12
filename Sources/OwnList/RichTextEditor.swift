@@ -83,6 +83,29 @@ enum DocumentFormat: String, CaseIterable {
     }
 }
 
+enum DocumentLink {
+    static func url(_ address: String) -> URL? {
+        let value = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, !value.contains(where: { $0.isWhitespace }),
+              let url = URL(string: value), let scheme = url.scheme?.lowercased(),
+              ["https","http","mailto","ownlist"].contains(scheme) else { return nil }
+        if scheme == "https" || scheme == "http" { guard url.host?.isEmpty == false else { return nil } }
+        else { guard !value.dropFirst(scheme.count + 1).isEmpty else { return nil } }
+        return url
+    }
+    static func title(_ title: String,url: URL) -> String {
+        let value = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? url.absoluteString : value
+    }
+    static func markdown(title: String,url: URL) -> String {
+        let label = title.replacingOccurrences(of: "\\",with: "\\\\")
+            .replacingOccurrences(of: "[",with: "\\[").replacingOccurrences(of: "]",with: "\\]")
+            .replacingOccurrences(of: "\n",with: " ")
+        let destination = url.absoluteString.replacingOccurrences(of: "(",with: "%28").replacingOccurrences(of: ")",with: "%29")
+        return "[\(label)](\(destination))"
+    }
+}
+
 /// Commands target this document's text view, including after a toolbar click changes focus.
 final class DocumentEditorController: ObservableObject {
     weak var editor: NSTextView?
@@ -136,7 +159,7 @@ final class DocumentEditorController: ObservableObject {
         if rich {
             let attributed = NSAttributedString(string: title,attributes: [.link: url,.font: NSFont.systemFont(ofSize: 14)])
             editor.insertText(attributed,replacementRange: editor.selectedRange())
-        } else { editor.insertText("[\(title)](\(url.absoluteString))",replacementRange: editor.selectedRange()) }
+        } else { editor.insertText(DocumentLink.markdown(title: title,url: url),replacementRange: editor.selectedRange()) }
         refreshSelection()
     }
     func apply(_ format: DocumentFormat) {
@@ -248,7 +271,7 @@ struct DetailDocumentEditor: NSViewRepresentable {
         editor.isAutomaticTextReplacementEnabled = rich
         editor.isAutomaticSpellingCorrectionEnabled = rich
         if rich, let data, let attributed = RichDocument.decode(data) {
-            let display = NSMutableAttributedString(attributedString: attributed)
+            let display = NSMutableAttributedString(attributedString: CodeLanguage.decorateLegacyBlocks(attributed))
             attributed.enumerateAttribute(.foregroundColor,in: NSRange(location: 0,length: attributed.length)) { value,range,_ in
                 guard let color = (value as? NSColor)?.usingColorSpace(.deviceRGB) else { return }
                 let gray = abs(color.redComponent - color.greenComponent) < 0.01 && abs(color.greenComponent - color.blueComponent) < 0.01
@@ -439,12 +462,41 @@ class DocumentTextView: StyledDocumentTextView {
             super.paste(sender)
         } catch { transferError(error.localizedDescription) }
     }
+    private func languageButtons() -> [(String,String,NSRect)] {
+        guard isRichText,let storage = textStorage,let layout = layoutManager,let container = textContainer else { return [] }
+        var buttons: [(String,String,NSRect)] = []
+        storage.enumerateAttribute(.ziloBlock,in: NSRange(location: 0,length: storage.length)) { value,range,_ in
+            guard let meta = value as? [String:String],meta["kind"] == "codeLabel",let block = meta["block"] else { return }
+            var textRange = range
+            while textRange.length > 0 && (storage.string as NSString).substring(with: NSRange(location: NSMaxRange(textRange) - 1,length: 1)) == "\n" { textRange.length -= 1 }
+            let glyphs = layout.glyphRange(forCharacterRange: textRange,actualCharacterRange: nil)
+            var rect = layout.boundingRect(forGlyphRange: glyphs,in: container).offsetBy(dx: textContainerOrigin.x,dy: textContainerOrigin.y)
+            rect.size.width += 24; rect.size.height = max(rect.height,18)
+            buttons.append((block,meta["language"] ?? "plaintext",rect))
+        }
+        return buttons
+    }
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        for (_,_,rect) in languageButtons() { addCursorRect(rect,cursor: .pointingHand) }
+    }
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow,from: nil)
+        if isEditable,let (block,language,rect) = languageButtons().first(where: { $0.2.contains(point) }) {
+            CodeLanguageMenu.show(current: language,at: NSPoint(x: rect.minX,y: rect.maxY),in: self) { [weak self] selected in
+                guard let self else { return }
+                _ = CodeLanguage.changeRichBlock(block,language: selected,in: self)
+            }
+            return
+        }
+        super.mouseDown(with: event)
+    }
     override func draw(_ dirtyRect: NSRect) {
         if let storage = textStorage, let manager = layoutManager, let container = textContainer {
             manager.ensureLayout(for: container)
             var ranges: [NSRange] = []
             storage.enumerateAttributes(in: NSRange(location: 0,length: storage.length)) { attributes,range,_ in
-                guard MarkdownTyping.isCodeBlock(attributes) else { return }
+                guard MarkdownTyping.isCodeBlock(attributes) || DocumentStyle.metadata(attributes)["kind"] == "codeLabel" else { return }
                 if let last = ranges.last, NSMaxRange(last) == range.location { ranges[ranges.count - 1].length += range.length }
                 else { ranges.append(range) }
             }
@@ -460,6 +512,13 @@ class DocumentTextView: StyledDocumentTextView {
             }
         }
         super.draw(dirtyRect)
+        for (_,_,rect) in languageButtons() where rect.intersects(dirtyRect) {
+            let arrow = NSBezierPath(); let x = rect.maxX - 15; let y = rect.midY
+            arrow.lineWidth = 1.1; arrow.lineCapStyle = .round; arrow.lineJoinStyle = .round
+            arrow.move(to: NSPoint(x: x - 2.5,y: y - 1.5)); arrow.line(to: NSPoint(x: x,y: y - 4)); arrow.line(to: NSPoint(x: x + 2.5,y: y - 1.5))
+            arrow.move(to: NSPoint(x: x - 2.5,y: y + 1.5)); arrow.line(to: NSPoint(x: x,y: y + 4)); arrow.line(to: NSPoint(x: x + 2.5,y: y + 1.5))
+            NSColor.secondaryLabelColor.setStroke(); arrow.stroke()
+        }
     }
 }
 final class DocumentScrollView: NSScrollView {
@@ -573,11 +632,12 @@ enum MarkdownTyping {
         let selected = text.substring(with: range)
         let block = NSMutableAttributedString(string: "")
         if range.location > 0 && text.character(at: range.location - 1) != 10 { block.append(NSAttributedString(string: "\n",attributes: bodyAttributes)) }
-        let start = range.location + block.length
-        block.append(NSAttributedString(string: selected + (selected.hasSuffix("\n") ? "" : "\n"),attributes: codeBlockAttributes))
-        block.append(NSAttributedString(string: "\n",attributes: bodyAttributes))
+        let parsed = CodeLanguage.richBlock(code: selected,language: "plaintext")
+        let start = range.location + block.length + (parsed.string as NSString).lineRange(for: NSRange(location: 0,length: 0)).length
+        block.append(parsed)
         editor.insertText(block,replacementRange: range)
-        editor.setSelectedRange(NSRange(location: start,length: 0)); editor.typingAttributes = codeBlockAttributes
+        editor.setSelectedRange(NSRange(location: start,length: 0))
+        editor.typingAttributes = block.attributes(at: start - range.location,effectiveRange: nil)
     }
     private static func convertPastedCodeBlock(in editor: NSTextView,caret: Int) -> Bool {
         let text = editor.string as NSString
@@ -601,8 +661,8 @@ enum MarkdownTyping {
         let contentStart = NSMaxRange(lines[opening].range)
         let contentRange = NSRange(location: contentStart,length: max(0,lines[closing].range.location - contentStart))
         let content = source.substring(with: contentRange)
-        let block = NSMutableAttributedString(string: content + (content.hasSuffix("\n") ? "" : "\n"),attributes: codeBlockAttributes)
-        block.append(NSAttributedString(string: "\n",attributes: bodyAttributes))
+        let language = String(lines[opening].value.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+        let block = CodeLanguage.richBlock(code: content,language: language)
         let closingRange = lines[closing].range
         editor.insertText(block,replacementRange: NSRange(location: start,length: NSMaxRange(closingRange) - start))
         editor.setSelectedRange(NSRange(location: start + block.length,length: 0)); editor.typingAttributes = bodyAttributes
@@ -688,13 +748,18 @@ enum MarkdownTyping {
                 editor.setSelectedRange(NSRange(location: line.location,length: 0))
             } else {
                 let indentation = String(input.prefix { $0 == " " || $0 == "\t" })
-                replace(in: editor,range: editor.selectedRange(),with: "\n" + indentation,attributes: codeBlockAttributes)
+                replace(in: editor,range: editor.selectedRange(),with: "\n" + indentation,attributes: editor.typingAttributes)
             }
             return true
         }
         if input == full, match(#"^```[A-Za-z0-9_+.\-]*[ \t]*$"#,in: input) != nil {
-            replace(in: editor,range: line,with: "\n",attributes: codeBlockAttributes)
-            editor.setSelectedRange(NSRange(location: line.location,length: 0)); return true
+            let language = String(input.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            let block = CodeLanguage.richBlock(code: "",language: language)
+            let codeStart = (block.string as NSString).lineRange(for: NSRange(location: 0,length: 0)).length
+            editor.insertText(block,replacementRange: line)
+            editor.setSelectedRange(NSRange(location: line.location + codeStart,length: 0))
+            editor.typingAttributes = block.attributes(at: codeStart,effectiveRange: nil)
+            return true
         }
         let marker: String
         if input.hasPrefix("• ") { marker = "• " }

@@ -5,6 +5,66 @@ import WebKit
 @testable import OwnList
 
 final class OwnListTests: XCTestCase {
+    func testEnglishQuickAddPreservesMetadataAndHonorsTextPreferences() {
+        let value = QuickParser.parse("tomorrow at 3 pm Write report #work !3",now: date(2026,10,11),calendar: calendar)
+        XCTAssertEqual(value.title,"Write report")
+        XCTAssertEqual(value.due,date(2026,10,12,15))
+        XCTAssertEqual(value.tags,["work"]); XCTAssertEqual(value.priority,3)
+        let preserved = QuickParser.parse("today at 12 am Review",now: date(2026,10,11),calendar: calendar,removeDates: false)
+        XCTAssertEqual(preserved.title,"today at 12 am Review"); XCTAssertEqual(preserved.due,date(2026,10,11,0))
+        XCTAssertNil(QuickParser.parse("Todayland planning",now: date(2026,10,11),calendar: calendar).due)
+        XCTAssertNil(QuickParser.parse("tomorrow at 3 pm Review",now: date(2026,10,11),calendar: calendar,recognizeDates: false).due)
+    }
+    func testEnglishInterfaceResourcesKeepStoredIdentifiersAndFormatArguments() throws {
+        let path = try XCTUnwrap(ZiloLanguage.bundle.path(forResource: "en",ofType: "lproj"))
+        let bundle = try XCTUnwrap(Bundle(path: path))
+        XCTAssertEqual(bundle.localizedString(forKey: "今天",value: nil,table: nil),"Today")
+        XCTAssertEqual(bundle.localizedString(forKey: "添加任务至“%@”，回车创建",value: nil,table: nil),"Add to “%@”, press Return")
+        XCTAssertEqual(Module.tasks.rawValue,"任务")
+        XCTAssertEqual(DocumentEditingMode.richText.rawValue,"richText")
+    }
+    func testTaskCreationPreferencesKeepTextWhileRecognizingMetadata() throws {
+        let name = "ZiloSettingsTests-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name)); defer { defaults.removePersistentDomain(forName: name) }
+        defaults.set(false,forKey: "removeDateText"); defaults.set(false,forKey: "removeTagText")
+        let result = TaskCreationPreferences.parse("明天下午3点 写周报 #工作 !3",defaults: defaults,now: date(2026,10,10),calendar: calendar)
+        XCTAssertEqual(result.title,"明天下午3点 写周报 #工作")
+        XCTAssertEqual(result.due,date(2026,10,11,15)); XCTAssertEqual(result.tags,["工作"]); XCTAssertEqual(result.priority,3)
+        defaults.set(false,forKey: "recognizeDates")
+        let plain = TaskCreationPreferences.parse("明天下午3点 写周报 #工作",defaults: defaults,now: date(2026,10,10),calendar: calendar)
+        XCTAssertNil(plain.due); XCTAssertEqual(plain.title,"明天下午3点 写周报 #工作"); XCTAssertEqual(plain.tags,["工作"])
+    }
+    func testTaskDefaultsSeparateAllDayAndTimedRemindersAndUseCalendarDays() throws {
+        let name = "ZiloDefaultsTests-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name)); defer { defaults.removePersistentDomain(forName: name) }
+        XCTAssertNil(TaskCreationPreferences.due(defaults: defaults)); XCTAssertEqual(TaskCreationPreferences.reminders(allDay: true,defaults: defaults),[0])
+        defaults.set(-1.0,forKey: "defaultAllDayReminder"); defaults.set(900.0,forKey: "defaultTimedReminder")
+        XCTAssertEqual(TaskCreationPreferences.reminders(allDay: true,defaults: defaults),[])
+        XCTAssertEqual(TaskCreationPreferences.reminders(allDay: false,defaults: defaults),[900])
+        defaults.set("tomorrow",forKey: "defaultTaskDate")
+        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "America/New_York")!
+        let now = c.date(from: DateComponents(year: 2026,month: 3,day: 8,hour: 12))!
+        let next = try XCTUnwrap(TaskCreationPreferences.due(defaults: defaults,now: now,calendar: c))
+        XCTAssertEqual(c.component(.day,from: next),9); XCTAssertEqual(c.component(.hour,from: next),0)
+    }
+    func testCalendarSettingsAlignMonthAndWeekAndProduceLunarLabels() throws {
+        let c = CalendarPreferences.calendar(firstWeekday: 2,timeZone: calendar.timeZone)
+        let day = date(2026,10,11)
+        let start = try XCTUnwrap(c.dateInterval(of: .weekOfYear,for: day)?.start)
+        XCTAssertEqual(c.component(.weekday,from: start),2)
+        XCTAssertEqual(c.component(.day,from: start),5)
+        XCTAssertEqual(CalendarPreferences.lunarLabel(date(2026,2,17),timeZone: calendar.timeZone),"正月")
+        XCTAssertFalse(CalendarPreferences.lunarLabel(day,timeZone: calendar.timeZone).isEmpty)
+        XCTAssertTrue((1...7).contains(CalendarPreferences.calendar(firstWeekday: 99).firstWeekday))
+    }
+    func testHiddenModulesPreserveOtherOptionsAndKeepCoreAccess() {
+        let preference = ModulePreferences(rawValue: "{\"日历\":false,\"future\":true}")
+        XCTAssertFalse(preference.isVisible(.calendar)); XCTAssertTrue(preference.isVisible(.tasks)); XCTAssertTrue(preference.isVisible(.stats))
+        let changed = ModulePreferences(rawValue: preference.updating(.habits,to: false))
+        XCTAssertFalse(changed.isVisible(.calendar)); XCTAssertFalse(changed.isVisible(.habits)); XCTAssertTrue(changed.rawValue.contains("future"))
+        XCTAssertTrue(ModulePreferences(rawValue: "broken").isVisible(.focus))
+    }
+
     @MainActor func testDeletedListRestoresContentsAndSupportsUndoRedo() throws {
         let store = Store(persistence: Persistence(inMemory: true))
         let list = try store.commitList(existing: nil,name: "项目",folder: "工作",color: "green",sections: "计划,完成",defaultView: "看板")
@@ -526,7 +586,7 @@ final class OwnListTests: XCTestCase {
         let editor = NSTextView(); editor.isRichText = true; editor.typingAttributes = MarkdownTyping.bodyAttributes
         editor.insertText("```swift",replacementRange: editor.selectedRange())
         XCTAssertTrue(MarkdownTyping.insertNewline(in: editor)); XCTAssertTrue(MarkdownTyping.isCodeBlock(editor.typingAttributes))
-        XCTAssertEqual(editor.selectedRange().location,0)
+        XCTAssertEqual(editor.selectedRange().location,"Swift\n".utf16.count)
         editor.insertText("    let value = \"**中文🙂**\"",replacementRange: editor.selectedRange())
         XCTAssertFalse(MarkdownTyping.recognize(in: editor)); XCTAssertTrue(editor.string.contains("**中文🙂**"))
         XCTAssertTrue(MarkdownTyping.insertNewline(in: editor)); XCTAssertTrue(editor.string.contains("\n    \n"))
@@ -535,13 +595,13 @@ final class OwnListTests: XCTestCase {
         editor.insertText("```",replacementRange: editor.selectedRange()); XCTAssertFalse(MarkdownTyping.recognize(in: editor))
         XCTAssertTrue(MarkdownTyping.insertNewline(in: editor)); XCTAssertFalse(MarkdownTyping.isCodeBlock(editor.typingAttributes))
         editor.insertText("**正文恢复**",replacementRange: editor.selectedRange()); XCTAssertTrue(MarkdownTyping.recognize(in: editor))
-        XCTAssertTrue(editor.string.hasSuffix("正文恢复\n")); XCTAssertFalse(editor.string.contains("```"))
+        XCTAssertTrue(editor.string.trimmingCharacters(in: .newlines).hasSuffix("正文恢复")); XCTAssertFalse(editor.string.contains("```"))
     }
     @MainActor func testPastedCodeBlockWhitespaceRTFAndReediting() throws {
         let editor = NSTextView(); editor.isRichText = true; editor.typingAttributes = MarkdownTyping.bodyAttributes
         let code = "  print(\"中文🙂\")\n\n\t**literal**\n- literal\n"
         editor.insertText("前文\n```python\n" + code + "```",replacementRange: editor.selectedRange())
-        XCTAssertTrue(MarkdownTyping.recognize(in: editor)); XCTAssertEqual(editor.string,"前文\n" + code + "\n")
+        XCTAssertTrue(MarkdownTyping.recognize(in: editor)); XCTAssertEqual(editor.string,"前文\nPython\n" + code + "\n")
         XCTAssertFalse(MarkdownTyping.isCodeBlock(editor.typingAttributes))
         let rtf = try XCTUnwrap(editor.rtf(from: NSRange(location: 0,length: editor.string.utf16.count)))
         let restored = try NSAttributedString(data: rtf,options: [.documentType: NSAttributedString.DocumentType.rtf],documentAttributes: nil)
@@ -564,13 +624,13 @@ final class OwnListTests: XCTestCase {
         let parent = DetailDocumentEditor(text: fenced,data: nil,rich: true,controller: DocumentEditorController(),height: .constant(26)) { text,_ in persisted = text }
         let coordinator = DetailDocumentEditor.Coordinator(parent: parent); editor.delegate = coordinator
         editor.localUndo.beginUndoGrouping(); coordinator.textDidChange(Notification(name: NSText.didChangeNotification,object: editor)); editor.localUndo.endUndoGrouping()
-        XCTAssertEqual(editor.string,"  **literal🙂**\n\n"); XCTAssertEqual(persisted,editor.string)
+        XCTAssertEqual(editor.string,"纯文本\n  **literal🙂**\n\n"); XCTAssertEqual(persisted,editor.string)
         coordinator.performUndo(in: editor); XCTAssertEqual(editor.string,fenced); XCTAssertEqual(persisted,fenced)
-        coordinator.performUndo(in: editor,redo: true); XCTAssertEqual(editor.string,"  **literal🙂**\n\n"); XCTAssertEqual(persisted,editor.string)
+        coordinator.performUndo(in: editor,redo: true); XCTAssertEqual(editor.string,"纯文本\n  **literal🙂**\n\n"); XCTAssertEqual(persisted,editor.string)
         editor.delegate = nil; editor.string = "前文\nfirst\nsecond"; editor.typingAttributes = MarkdownTyping.bodyAttributes
         editor.setSelectedRange((editor.string as NSString).range(of: "first\nsecond"))
         let controller = DocumentEditorController(); controller.editor = editor; controller.rich = true; controller.apply(.codeBlock)
-        XCTAssertEqual(editor.string,"前文\nfirst\nsecond\n\n"); XCTAssertTrue(MarkdownTyping.isCodeBlock(editor.typingAttributes))
+        XCTAssertEqual(editor.string,"前文\n纯文本\nfirst\nsecond\n\n"); XCTAssertTrue(MarkdownTyping.isCodeBlock(editor.typingAttributes))
         XCTAssertTrue(controller.activeFormats.contains(.codeBlock))
         // Returning focus from a SwiftUI menu must restore the block's input
         // style, even if updating the RTF view reset the typing attributes.
@@ -1032,5 +1092,114 @@ extension OwnListTests {
         XCTAssertTrue(html.contains("disabled aria-label=\"已完成\" checked"))
         XCTAssertTrue(html.contains("disabled aria-label=\"未完成\""))
         XCTAssertTrue(html.contains("[ ] 普通符号")); XCTAssertTrue(html.contains("<p>[x] 普通正文</p>"))
+    }
+}
+
+final class WellbeingTests: XCTestCase {
+    var calendar: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "America/New_York")!; return c }
+    func day(_ year: Int,_ month: Int,_ day: Int,_ hour: Int = 0) -> Date { calendar.date(from: DateComponents(year: year,month: month,day: day,hour: hour))! }
+    func testCountdownUsesCalendarDaysAcrossDaylightSaving() {
+        var value = Countdown(); value.date = day(2026,3,9)
+        XCTAssertEqual(value.days(on: day(2026,3,7,23),calendar: calendar),2)
+        XCTAssertEqual(value.days(on: day(2026,3,9,20),calendar: calendar),0)
+        XCTAssertEqual(value.days(on: day(2026,3,10),calendar: calendar),-1)
+    }
+    func testYearlyLeapDayClampsAndAdvancesWithoutMovingOriginalDate() {
+        var value = Countdown(); value.date = day(2024,2,29); value.yearly = true
+        XCTAssertEqual(value.occurrence(on: day(2026,2,27),calendar: calendar),day(2026,2,28))
+        XCTAssertEqual(value.occurrence(on: day(2026,3,1),calendar: calendar),day(2027,2,28))
+        XCTAssertEqual(value.occurrence(on: day(2028,2,27),calendar: calendar),day(2028,2,29))
+        XCTAssertEqual(value.date,day(2024,2,29))
+    }
+    func testCountdownRemindersSkipPastFireTimeAndCancelDeletedItems() {
+        var value = Countdown(); value.date = day(2026,10,17); value.yearly = true; value.reminderDays = 7; value.reminderHour = 9
+        let times = value.reminders(after: day(2026,10,11),calendar: calendar)
+        XCTAssertEqual(times.first,day(2027,10,10,9)); XCTAssertEqual(times.count,3)
+        XCTAssertTrue(times.allSatisfy { $0 > day(2026,10,11) })
+        value.deleted = true; XCTAssertEqual(value.reminders(after: day(2026,10,11),calendar: calendar),[])
+        value.deleted = false; value.yearly = false; XCTAssertEqual(value.reminders(after: day(2026,10,11),calendar: calendar),[])
+    }
+    @MainActor func testCountdownPersistenceBackupUndoAndOldBackupCompatibility() throws {
+        let store = Store(persistence: Persistence(inMemory: true)); var value = Countdown(); value.name = "发布日"; value.date = day(2027,1,1); value.reminderDays = 1
+        XCTAssertTrue(store.save(value)); store.reload(); XCTAssertEqual(store.countdowns.first,value)
+        let encoded = try JSONEncoder().encode(store.backup); let decoded = try JSONDecoder().decode(Backup.self,from: encoded); XCTAssertEqual(decoded.countdowns,[value])
+        value.name = "新发布日"; XCTAssertTrue(store.save(value)); store.undo(); XCTAssertEqual(store.countdowns.first?.name,"发布日"); store.redo(); XCTAssertEqual(store.countdowns.first?.name,"新发布日")
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String:Any]); json.removeValue(forKey: "countdowns")
+        let legacy = try JSONDecoder().decode(Backup.self,from: JSONSerialization.data(withJSONObject: json)); XCTAssertNil(legacy.countdowns)
+        let restored = Store(persistence: Persistence(inMemory: true)); restored.apply(decoded); XCTAssertEqual(restored.countdowns,[decoded.countdowns!.first!])
+    }
+    @MainActor func testFocusPauseResumeExcludesPauseAndStopCreatesOnePartialRecord() throws {
+        let key = "ZiloFocusTests-" + UUID().uuidString; let defaults = try XCTUnwrap(UserDefaults(suiteName: key)); defer { defaults.removePersistentDomain(forName: key) }
+        var now = day(2026,10,11,10); let began = now
+        let timer = FocusTimer(defaults: defaults,now: { now },notifications: false); var records: [FocusRecord] = []; timer.onRecord = { records.append($0) }
+        timer.start(); now = now.addingTimeInterval(30); timer.pause(); XCTAssertEqual(timer.elapsed,30)
+        now = now.addingTimeInterval(120); timer.start(); now = now.addingTimeInterval(10); timer.stop(); timer.stop()
+        XCTAssertEqual(records.count,1); XCTAssertEqual(records.first?.seconds,40); XCTAssertEqual(records.first?.started,began); XCTAssertEqual(records.first?.ended,now); XCTAssertEqual(records.first?.isPomodoro,false)
+    }
+    @MainActor func testFocusRestoresPausedAndOfflineCompletionBeforeRecordCallback() throws {
+        let key = "ZiloFocusRestore-" + UUID().uuidString; let defaults = try XCTUnwrap(UserDefaults(suiteName: key)); defer { defaults.removePersistentDomain(forName: key) }
+        var now = day(2026,10,11,10)
+        let timer = FocusTimer(defaults: defaults,now: { now },notifications: false); timer.minutes = 1; timer.saveDurations(); timer.start(); now = now.addingTimeInterval(20); timer.pause()
+        let resumed = FocusTimer(defaults: defaults,now: { now },notifications: false); XCTAssertEqual(resumed.elapsed,20); XCTAssertEqual(resumed.remaining,40); resumed.start(); now = now.addingTimeInterval(45)
+        let offline = FocusTimer(defaults: defaults,now: { now },notifications: false); var records: [FocusRecord] = []; offline.onRecord = { records.append($0) }; offline.tick(); offline.stop()
+        XCTAssertEqual(records.count,1); XCTAssertEqual(records.first?.seconds,60); XCTAssertEqual(records.first?.isPomodoro,true)
+    }
+}
+
+final class PersonalFeaturesTests: XCTestCase {
+    var calendar: Calendar { var value = Calendar(identifier: .gregorian); value.timeZone = TimeZone(identifier: "Asia/Hong_Kong")!; return value }
+    func day(_ year: Int,_ month: Int,_ day: Int,_ hour: Int = 0) -> Date { calendar.date(from: DateComponents(year: year,month: month,day: day,hour: hour))! }
+    func testDefaultCountdownsHaveStableIDsAndFollowCalendarRecurrence() throws {
+        let now = day(2026,10,12), defaults = Countdown.defaults(started: now)
+        XCTAssertEqual(defaults.map(\.id),Countdown.defaults(started: day(2026,10,13)).map(\.id))
+        XCTAssertEqual(defaults.count,3); XCTAssertTrue(defaults.allSatisfy(\.pinned))
+        let weekend = try XCTUnwrap(defaults.first { $0.preset == "weekend" })
+        XCTAssertEqual(weekend.days(on: now,calendar: calendar),5)
+        XCTAssertEqual(weekend.days(on: day(2026,10,17),calendar: calendar),0)
+        XCTAssertEqual(weekend.occurrence(on: day(2026,10,18),calendar: calendar),day(2026,10,24))
+        let festival = try XCTUnwrap(defaults.first { $0.preset == "springFestival" })
+        XCTAssertEqual(festival.occurrence(on: now,calendar: calendar),day(2027,2,6))
+        XCTAssertEqual(festival.occurrence(on: day(2027,2,6,23),calendar: calendar),day(2027,2,6))
+        XCTAssertEqual(festival.occurrence(on: day(2027,2,7),calendar: calendar),day(2028,1,26))
+        let started = try XCTUnwrap(defaults.first { $0.preset == "started" }); XCTAssertEqual(started.days(on: day(2026,10,14),calendar: calendar),-2)
+    }
+    func testLegacyChecklistsDecodeAndIndividualRemindersRoundTrip() throws {
+        let check = try JSONDecoder().decode(CheckItem.self,from: Data("{\"id\":\"D3199434-9229-4B67-8301-898DB1D063AC\",\"title\":\"旧检查项\",\"done\":false}".utf8))
+        XCTAssertNil(check.due); XCTAssertNil(check.reminders)
+        var updated = check; updated.due = day(2026,10,14,15); updated.reminders = [0,900,86400]
+        XCTAssertEqual(try JSONDecoder().decode(CheckItem.self,from: JSONEncoder().encode(updated)),updated)
+        var countdown = Countdown(); countdown.name = "旧纪念日"
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(countdown)) as? [String: Any]); json.removeValue(forKey: "preset")
+        XCTAssertEqual(try JSONDecoder().decode(Countdown.self,from: JSONSerialization.data(withJSONObject: json)),countdown)
+    }
+    func testRemindersHaveNoApplicationQuotaAndCompletedChecksStopScheduling() {
+        let now = day(2026,10,12)
+        var task = TaskItem(); task.title = "个人任务"; task.due = now.addingTimeInterval(100000); task.reminders = (0..<70).map { Double($0 * 60) }
+        var check = CheckItem(title: "检查项"); check.due = now.addingTimeInterval(500); check.reminders = [0,300,300,Double.infinity,-1]
+        task.checks = [check]
+        XCTAssertEqual(task.plannedReminders(after: now).count,72)
+        XCTAssertEqual(Set(task.plannedReminders(after: now).map(\.id)).count,72)
+        XCTAssertEqual(task.plannedReminders(after: now).filter { $0.checkID == check.id }.count,2)
+        task.checks[0].done = true; XCTAssertEqual(task.plannedReminders(after: now).count,70)
+        task.archived = true; XCTAssertTrue(task.plannedReminders(after: now).isEmpty)
+        task.archived = nil; task.completed = true; XCTAssertTrue(task.plannedReminders(after: now).isEmpty)
+    }
+    func testTimeRangeKeepsDeadlineAndDurationConsistent() {
+        var task = TaskItem(); task.due = day(2026,10,12,15); task.setStart(day(2026,10,12,13))
+        XCTAssertEqual(task.duration,7200)
+        task.setDue(day(2026,10,12,16)); XCTAssertEqual(task.duration,10800)
+        task.setStart(day(2026,10,12,17)); XCTAssertEqual(task.due,day(2026,10,12,20))
+        task.setDue(day(2026,10,12,12)); XCTAssertEqual(task.start,day(2026,10,12,9))
+        task.setDue(nil); XCTAssertNil(task.start); XCTAssertTrue(task.reminders.isEmpty)
+    }
+    func testAdvancedSearchCombinesFiltersAndUsesInclusiveCalendarBoundaries() {
+        let now = day(2026,10,12,15); var task = TaskItem(); task.title = "监控"; task.tags = ["验收"]; task.priority = 3; task.starred = true; task.due = day(2026,10,18,23)
+        task.attachments = [Attachment(name: "Report.PDF",relativePath: "Attachments/test.pdf")]
+        var query = TaskSearchCriteria(); query.priority = 3; query.tag = "#验收"; query.attachmentsOnly = true; query.starredOnly = true; query.date = "week"
+        XCTAssertTrue(query.matches(task,query: "report.pdf",now: now,calendar: calendar))
+        task.due = day(2026,10,19); XCTAssertFalse(query.matches(task,now: now,calendar: calendar))
+        query.date = "any"; query.status = "completed"; XCTAssertFalse(query.matches(task,now: now,calendar: calendar))
+        task.completed = true; XCTAssertTrue(query.matches(task,now: now,calendar: calendar))
+        task.deleted = true; XCTAssertFalse(query.matches(task,now: now,calendar: calendar))
     }
 }

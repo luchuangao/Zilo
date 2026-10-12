@@ -1,0 +1,395 @@
+// !$*UTF8*$!
+{
+"classes" = {
+};
+"objectVersion" = "56";
+"archiveVersion" = "1";
+"objects" = {
+"CC24E9C537DE47338DAEBA6D" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "folder"; "path" = "Sources/OwnList/Localization/en.lproj"; "sourceTree" = "<group>"; };
+"8B412C7F04E84987B3716658" = { "isa" = "PBXBuildFile"; "fileRef" = "CC24E9C537DE47338DAEBA6D"; };
+"4D5CEE158C4F4A3EB00EAA82" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "folder"; "path" = "Sources/OwnList/Localization/zh-Hans.lproj"; "sourceTree" = "<group>"; };
+"B53AF1FEFEF84DCAA9526723" = { "isa" = "PBXBuildFile"; "fileRef" = "4D5CEE158C4F4A3EB00EAA82"; };
+
+"98F54143AB4E86B28C3AFEE0" = {
+"buildConfigurationList" = "C81BE6FD63C7E0B780E1FA69";
+"projectDirPath" = "";
+"projectRoot" = "";
+"knownRegions" = ("zh-Hans","en","Base");
+"isa" = "PBXProject";
+"compatibilityVersion" = "Xcode 14.0";
+"productRefGroup" = "FBDC4F23F93125BBEEAE800C";
+"mainGroup" = "B28B7AF69320201D1CF206EB";
+"developmentRegion" = "zh-Hans";
+"attributes" = {
+"LastUpgradeCheck" = "2600";
+"TargetAttributes" = {
+"0E8A3AD980EC179856012B7E" = {
+"SystemCapabilities" = {
+"com.apple.Push" = {
+"enabled" = "1";
+};
+"com.apple.iCloud" = {
+"enabled" = "1";
+};
+};
+"CreatedOnToolsVersion" = "26.0";
+"DevelopmentTeam" = "VFDQL6Z55P";
+};
+};
+};
+"targets" = ("0E8A3AD980EC179856012B7E","A3A0D56279A1A43D1772BC10");
+};
+"B66895320325DA295E7247BD" = {
+"isa" = "PBXSourcesBuildPhase";
+"buildActionMask" = "2147483647";
+"files" = ("A6B0251542C6ED584925A8DE","DCD19D03EBB4F826F65235B0");
+"runOnlyForDeploymentPostprocessing" = "0";
+};
+"C81BE6FD63C7E0B780E1FA69" = {
+"isa" = "XCConfigurationList";
+"defaultConfigurationIsVisible" = "0";
+"defaultConfigurationName" = "Release";
+"buildConfigurations" = ("D08DD63EED508AD30D0CB0B4","811CB99F7A296F7846C18A7F");
+};
+"FBDC4F23F93125BBEEAE800C" = {
+"isa" = "PBXGroup";
+"name" = "Products";
+"children" = ("38A007151ABE87CC01A5B6E9","9BA1BB81C2275027C178E58F");
+"sourceTree" = "<group>";
+};
+"6C1BDC3D22E39CB59F8A3AB0" = {
+"path" = "Mobile/MobilePlanning.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"60280D878066FB408D8F0C0F" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "3DB97B8EE1E1CC751F8803C1";
+};
+"7AFB69CBAE27609D29CE4E83" = {
+"path" = "Sources/OwnList/Models.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"A467F132404A1B42D146B91C" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "6C1BDC3D22E39CB59F8A3AB0";
+};
+"859F6042D5855F0B269619B8" = {
+"path" = "Mobile/MobileNotifications.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"D08DD63EED508AD30D0CB0B4" = {
+"isa" = "XCBuildConfiguration";
+"buildSettings" = {
+};
+"name" = "Debug";
+};
+"5C806B5C18884046A78F9F80" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "EF9E1BCB4AA67255250C8E6D";
+};
+"DE3B185D21FA07562FF63EB1" = {
+"path" = "Mobile/Assets.xcassets";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "folder.assetcatalog";
+"sourceTree" = "SOURCE_ROOT";
+};
+"3DB97B8EE1E1CC751F8803C1" = {
+"path" = "Mobile/MobileApp.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"B28B7AF69320201D1CF206EB" = {
+"isa" = "PBXGroup";
+"sourceTree" = "<group>";
+"children" = ( "CC24E9C537DE47338DAEBA6D", "4D5CEE158C4F4A3EB00EAA82", "3AF9797BCF892E28AFEC99C9","556D0C84C41CC9EA7661CE15","23EDB31C82B4291B2DE9CA98","6C1BDC3D22E39CB59F8A3AB0","3DB97B8EE1E1CC751F8803C1","651B2148F1DE25CE1641715B","859F6042D5855F0B269619B8","7AFB69CBAE27609D29CE4E83","A03F1D9775CC341D0AC35610","471D3A493E6E9D582CF6A2B7","DE3B185D21FA07562FF63EB1","EF9E1BCB4AA67255250C8E6D","FBDC4F23F93125BBEEAE800C","2BF5D732C509E80FECE4A05A","0C0E16C6EC67EB76E1A3B0EB");
+};
+"7082CC0B6FC1282FCEABD07A" = {
+"isa" = "XCBuildConfiguration";
+"buildSettings" = {
+"CODE_SIGN_ENTITLEMENTS" = "Mobile/ZiloMobile.entitlements";
+"DEVELOPMENT_TEAM" = "VFDQL6Z55P";
+"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator";
+"CLANG_ENABLE_MODULES" = "YES";
+"PRODUCT_BUNDLE_IDENTIFIER" = "com.gaoluchuan.ownlist.ios";
+"ENABLE_USER_SCRIPT_SANDBOXING" = "YES";
+"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG";
+"SUPPORTS_MACCATALYST" = "NO";
+"DEBUG_INFORMATION_FORMAT" = "dwarf";
+"TARGETED_DEVICE_FAMILY" = "1";
+"CODE_SIGN_STYLE" = "Automatic";
+"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon";
+"ENABLE_TESTABILITY" = "YES";
+"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)","@executable_path/Frameworks");
+"SDKROOT" = "iphoneos";
+"SWIFT_VERSION" = "5.0";
+"ALWAYS_SEARCH_USER_PATHS" = "NO";
+"PRODUCT_NAME" = "Zilo";
+"IPHONEOS_DEPLOYMENT_TARGET" = "17.0";
+"SWIFT_EMIT_LOC_STRINGS" = "YES";
+"INFOPLIST_FILE" = "Mobile/Info.plist";
+"GENERATE_INFOPLIST_FILE" = "NO";
+};
+"name" = "Debug";
+};
+"BCE16DD0260827ECF338C787" = {
+"isa" = "PBXSourcesBuildPhase";
+"buildActionMask" = "2147483647";
+"files" = ("92C51648834C00123DAEA8E6","C194722EEFBB1F36CE2B7375","3F08B121B61AF8DCCEB98D48","A467F132404A1B42D146B91C","60280D878066FB408D8F0C0F","70E6EEA78A8162E56811F891","312D3E0920C30CB6B239A4B0","D5849FCB857D97C4CF5FCBD4","2CBBA6E725BB6BFD4B337A50","64B614EB6C34977F16AC6E2E");
+"runOnlyForDeploymentPostprocessing" = "0";
+};
+"7561BFB015D8F536760CB671" = {
+"isa" = "PBXFrameworksBuildPhase";
+"buildActionMask" = "2147483647";
+"files" = ();
+"runOnlyForDeploymentPostprocessing" = "0";
+};
+"A03F1D9775CC341D0AC35610" = {
+"path" = "Sources/OwnList/Persistence.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"651B2148F1DE25CE1641715B" = {
+"path" = "Mobile/MobileMindMap.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"A6B0251542C6ED584925A8DE" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "2BF5D732C509E80FECE4A05A";
+};
+"639A7CA24D39909E713B47F7" = {
+"isa" = "XCBuildConfiguration";
+"buildSettings" = {
+"CODE_SIGN_ENTITLEMENTS" = "Mobile/ZiloMobile.entitlements";
+"DEVELOPMENT_TEAM" = "VFDQL6Z55P";
+"SUPPORTED_PLATFORMS" = "iphoneos iphonesimulator";
+"CLANG_ENABLE_MODULES" = "YES";
+"PRODUCT_BUNDLE_IDENTIFIER" = "com.gaoluchuan.ownlist.ios";
+"ENABLE_USER_SCRIPT_SANDBOXING" = "YES";
+"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "";
+"SUPPORTS_MACCATALYST" = "NO";
+"DEBUG_INFORMATION_FORMAT" = "dwarf-with-dsym";
+"TARGETED_DEVICE_FAMILY" = "1";
+"CODE_SIGN_STYLE" = "Automatic";
+"SWIFT_OPTIMIZATION_LEVEL" = "-O";
+"ASSETCATALOG_COMPILER_APPICON_NAME" = "AppIcon";
+"ENABLE_TESTABILITY" = "NO";
+"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)","@executable_path/Frameworks");
+"SDKROOT" = "iphoneos";
+"SWIFT_VERSION" = "5.0";
+"ALWAYS_SEARCH_USER_PATHS" = "NO";
+"PRODUCT_NAME" = "Zilo";
+"IPHONEOS_DEPLOYMENT_TARGET" = "17.0";
+"SWIFT_EMIT_LOC_STRINGS" = "YES";
+"INFOPLIST_FILE" = "Mobile/Info.plist";
+"GENERATE_INFOPLIST_FILE" = "NO";
+};
+"name" = "Release";
+};
+"2BF5D732C509E80FECE4A05A" = {
+"path" = "MobileTests/MobileStoreTests.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"EC65D3FC826460F485CA6F25" = {
+"isa" = "PBXContainerItemProxy";
+"containerPortal" = "98F54143AB4E86B28C3AFEE0";
+"remoteGlobalIDString" = "0E8A3AD980EC179856012B7E";
+"remoteInfo" = "ZiloMobile";
+"proxyType" = "1";
+};
+"D26037820F6D0F07AEAD057E" = {
+"isa" = "XCBuildConfiguration";
+"buildSettings" = {
+"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)","@executable_path/Frameworks","@loader_path/Frameworks");
+"BUNDLE_LOADER" = "$(TEST_HOST)";
+"DEVELOPMENT_TEAM" = "VFDQL6Z55P";
+"TARGETED_DEVICE_FAMILY" = "1";
+"TEST_HOST" = "$(BUILT_PRODUCTS_DIR)/Zilo.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Zilo";
+"ENABLE_TESTABILITY" = "YES";
+"GENERATE_INFOPLIST_FILE" = "YES";
+"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+"CODE_SIGN_STYLE" = "Automatic";
+"SDKROOT" = "iphoneos";
+"SWIFT_VERSION" = "5.0";
+"ALWAYS_SEARCH_USER_PATHS" = "NO";
+"PRODUCT_NAME" = "$(TARGET_NAME)";
+"IPHONEOS_DEPLOYMENT_TARGET" = "17.0";
+"PRODUCT_BUNDLE_IDENTIFIER" = "com.gaoluchuan.ownlist.ios.tests";
+};
+"name" = "Debug";
+};
+"38A007151ABE87CC01A5B6E9" = {
+"path" = "Zilo.app";
+"isa" = "PBXFileReference";
+"explicitFileType" = "wrapper.application";
+"sourceTree" = "BUILT_PRODUCTS_DIR";
+};
+"7466C01DF985B519685C5DA0" = {
+"isa" = "XCBuildConfiguration";
+"buildSettings" = {
+"LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)","@executable_path/Frameworks","@loader_path/Frameworks");
+"BUNDLE_LOADER" = "$(TEST_HOST)";
+"DEVELOPMENT_TEAM" = "VFDQL6Z55P";
+"TARGETED_DEVICE_FAMILY" = "1";
+"TEST_HOST" = "$(BUILT_PRODUCTS_DIR)/Zilo.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Zilo";
+"ENABLE_TESTABILITY" = "YES";
+"GENERATE_INFOPLIST_FILE" = "YES";
+"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
+"CODE_SIGN_STYLE" = "Automatic";
+"SDKROOT" = "iphoneos";
+"SWIFT_VERSION" = "5.0";
+"ALWAYS_SEARCH_USER_PATHS" = "NO";
+"PRODUCT_NAME" = "$(TARGET_NAME)";
+"IPHONEOS_DEPLOYMENT_TARGET" = "17.0";
+"PRODUCT_BUNDLE_IDENTIFIER" = "com.gaoluchuan.ownlist.ios.tests";
+};
+"name" = "Release";
+};
+"A3A0D56279A1A43D1772BC10" = {
+"buildConfigurationList" = "4B449BBD72A24101FBE6199F";
+"productReference" = "9BA1BB81C2275027C178E58F";
+"productType" = "com.apple.product-type.bundle.unit-test";
+"productName" = "ZiloMobileTests";
+"isa" = "PBXNativeTarget";
+"buildPhases" = ("B66895320325DA295E7247BD");
+"dependencies" = ("76AA3E8E33BC5522793F16F6");
+"name" = "ZiloMobileTests";
+"buildRules" = ();
+};
+"D5849FCB857D97C4CF5FCBD4" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "7AFB69CBAE27609D29CE4E83";
+};
+"471D3A493E6E9D582CF6A2B7" = {
+"path" = "Sources/OwnList/MarkdownPreview.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"2CBBA6E725BB6BFD4B337A50" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "A03F1D9775CC341D0AC35610";
+};
+"312D3E0920C30CB6B239A4B0" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "859F6042D5855F0B269619B8";
+};
+"4B449BBD72A24101FBE6199F" = {
+"isa" = "XCConfigurationList";
+"defaultConfigurationIsVisible" = "0";
+"defaultConfigurationName" = "Debug";
+"buildConfigurations" = ("D26037820F6D0F07AEAD057E","7466C01DF985B519685C5DA0");
+};
+"9B12E3BB00678236D5A21A87" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "DE3B185D21FA07562FF63EB1";
+};
+"EF9E1BCB4AA67255250C8E6D" = {
+"path" = "Sources/OwnList/PreviewResources";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "folder";
+"sourceTree" = "SOURCE_ROOT";
+};
+"0189424A5A60FED329FA868E" = {
+"isa" = "PBXResourcesBuildPhase";
+"buildActionMask" = "2147483647";
+"files" = ( "8B412C7F04E84987B3716658", "B53AF1FEFEF84DCAA9526723", "9B12E3BB00678236D5A21A87","5C806B5C18884046A78F9F80");
+"runOnlyForDeploymentPostprocessing" = "0";
+};
+"3AF9797BCF892E28AFEC99C9" = {
+"path" = "Mobile/MobileTaskDetail.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"811CB99F7A296F7846C18A7F" = {
+"isa" = "XCBuildConfiguration";
+"buildSettings" = {
+};
+"name" = "Release";
+};
+"C194722EEFBB1F36CE2B7375" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "556D0C84C41CC9EA7661CE15";
+};
+"3F08B121B61AF8DCCEB98D48" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "23EDB31C82B4291B2DE9CA98";
+};
+"64B614EB6C34977F16AC6E2E" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "471D3A493E6E9D582CF6A2B7";
+};
+"9BA1BB81C2275027C178E58F" = {
+"path" = "ZiloMobileTests.xctest";
+"isa" = "PBXFileReference";
+"explicitFileType" = "wrapper.cfbundle";
+"sourceTree" = "BUILT_PRODUCTS_DIR";
+};
+"76AA3E8E33BC5522793F16F6" = {
+"isa" = "PBXTargetDependency";
+"target" = "0E8A3AD980EC179856012B7E";
+"targetProxy" = "EC65D3FC826460F485CA6F25";
+};
+"556D0C84C41CC9EA7661CE15" = {
+"path" = "Mobile/MobileSettings.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"92C51648834C00123DAEA8E6" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "3AF9797BCF892E28AFEC99C9";
+};
+"70E6EEA78A8162E56811F891" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "651B2148F1DE25CE1641715B";
+};
+"C57128001CE614BF8549D6BB" = {
+"isa" = "XCConfigurationList";
+"defaultConfigurationIsVisible" = "0";
+"defaultConfigurationName" = "Release";
+"buildConfigurations" = ("7082CC0B6FC1282FCEABD07A","639A7CA24D39909E713B47F7");
+};
+"23EDB31C82B4291B2DE9CA98" = {
+"path" = "Mobile/MobileStore.swift";
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"0E8A3AD980EC179856012B7E" = {
+"productType" = "com.apple.product-type.application";
+"productReference" = "38A007151ABE87CC01A5B6E9";
+"buildConfigurationList" = "C57128001CE614BF8549D6BB";
+"productName" = "Zilo";
+"isa" = "PBXNativeTarget";
+"buildPhases" = ("BCE16DD0260827ECF338C787","7561BFB015D8F536760CB671","0189424A5A60FED329FA868E");
+"dependencies" = ();
+"name" = "ZiloMobile";
+"buildRules" = ();
+};
+"0C0E16C6EC67EB76E1A3B0EB" = {
+"isa" = "PBXFileReference";
+"lastKnownFileType" = "sourcecode.swift";
+"path" = "MobileTests/MobileFocusTests.swift";
+"sourceTree" = "SOURCE_ROOT";
+};
+"DCD19D03EBB4F826F65235B0" = {
+"isa" = "PBXBuildFile";
+"fileRef" = "0C0E16C6EC67EB76E1A3B0EB";
+};
+};
+"rootObject" = "98F54143AB4E86B28C3AFEE0";
+}
