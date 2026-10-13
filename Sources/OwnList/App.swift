@@ -86,13 +86,148 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) { MainActor.assumeIsolated { store?.automaticBackup() } }
 }
 struct QuickAddPanel: View {
-    @EnvironmentObject var store: Store; @State private var title = ""; @State private var listID: UUID?; @FocusState private var focused: Bool
-    var body: some View { VStack(alignment: .leading,spacing: 15) { TextField("明天下午3点 写周报 #工作 !3",text: $title).textFieldStyle(.roundedBorder).focused($focused).onSubmit(add); HStack { Picker("清单",selection: $listID) { Text("收集箱").tag(nil as UUID?); ForEach(store.lists.filter { !$0.deleted }) { Text($0.name).tag(Optional($0.id)) } }; Spacer(); Button("添加",action: add).buttonStyle(.borderedProminent).disabled(title.trimmingCharacters(in: .whitespaces).isEmpty) }; Text("识别日期、#标签、!1 至 !3 优先级").font(.caption).foregroundStyle(.secondary) }.padding(20).onAppear { focused = true } }
-    func add() { if store.add(title,listID: listID) != nil { title = "" } }
+    @EnvironmentObject var store: Store
+    var embedded = false
+    @State private var title = ""
+    @State private var listID: UUID?
+    @FocusState private var focused: Bool
+    private var canAdd: Bool { !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    private var selectedList: TaskList? { store.lists.first { $0.id == listID && !$0.deleted } }
+    var body: some View {
+        VStack(alignment: .leading,spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "plus").font(.system(size: 15)).foregroundStyle(ListTheme.secondary)
+                TextField("添加任务",text: $title).textFieldStyle(.plain).font(.system(size: 14))
+                    .focused($focused).onSubmit(add).help("明天下午3点 写周报 #工作 !3")
+            }.padding(.horizontal,12).frame(height: 44)
+                .background(ListTheme.input,in: RoundedRectangle(cornerRadius: 10))
+                .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(focused ? ListTheme.accent.opacity(0.55) : ListTheme.separator,lineWidth: 1) }
+            HStack(spacing: 10) {
+                QuickAddListMenu(lists: store.lists.filter { !$0.deleted },selection: $listID)
+                    .frame(width: 158,height: 30).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 8))
+                Spacer(minLength: 8)
+                Button(action: add) {
+                    HStack(spacing: 8) { Text("添加"); Image(systemName: "return").font(.system(size: 10,weight: .medium)) }
+                        .font(.system(size: 12,weight: .semibold)).padding(.horizontal,12).frame(height: 30)
+                        .foregroundStyle(canAdd ? Color.white : ListTheme.secondary.opacity(0.65))
+                        .background(canAdd ? ListTheme.accent : ListTheme.input,in: RoundedRectangle(cornerRadius: 8))
+                }.buttonStyle(.plain).disabled(!canAdd)
+            }
+            Text("识别日期、#标签、!1 至 !3 优先级").font(.system(size: 11)).foregroundStyle(ListTheme.secondary)
+                .fixedSize(horizontal: false,vertical: true)
+        }.padding(embedded ? 0 : 20).foregroundStyle(ListTheme.text).environment(\.locale,ZiloLanguage.locale)
+            .onAppear { focused = true }
+    }
+    private func add() { guard canAdd else { return }; if store.add(title,listID: selectedList?.id) != nil { title = ""; focused = true } }
+}
+private struct QuickAddListMenu: NSViewRepresentable {
+    var lists: [TaskList]
+    @Binding var selection: UUID?
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero,pullsDown: false)
+        button.isBordered = false; button.controlSize = .small; button.font = .systemFont(ofSize: 12)
+        button.cell?.alignment = .left; button.setContentHuggingPriority(.defaultLow,for: .horizontal)
+        button.target = context.coordinator; button.action = #selector(Coordinator.select(_:))
+        return button
+    }
+    func updateNSView(_ button: NSPopUpButton,context: Context) {
+        context.coordinator.parent = self
+        let titles = [ZiloLanguage.text("收集箱")] + lists.map(\.name)
+        let ids: [UUID?] = [nil] + lists.map { Optional($0.id) }
+        if button.itemTitles != titles || context.coordinator.ids != ids {
+            button.removeAllItems(); button.addItems(withTitles: titles)
+            for index in titles.indices { button.item(at: index)?.image = NSImage(systemSymbolName: index == 0 ? "tray" : "line.3.horizontal",accessibilityDescription: nil) }
+            context.coordinator.ids = ids
+        }
+        button.selectItem(at: ids.firstIndex(of: selection) ?? 0)
+        button.contentTintColor = NSColor(ListTheme.text)
+        button.setAccessibilityLabel(ZiloLanguage.text("清单"))
+    }
+    final class Coordinator: NSObject {
+        var parent: QuickAddListMenu
+        var ids: [UUID?] = []
+        init(_ parent: QuickAddListMenu) { self.parent = parent }
+        @objc func select(_ sender: NSPopUpButton) { guard ids.indices.contains(sender.indexOfSelectedItem) else { return }; parent.selection = ids[sender.indexOfSelectedItem] }
+    }
 }
 struct MenuPanel: View {
-    @EnvironmentObject var store: Store; @EnvironmentObject var focus: FocusTimer; @Environment(\.openWindow) var openWindow
-    var body: some View { VStack(alignment: .leading,spacing: 12) { HStack { Label("Zilo",systemImage: "checkmark.circle.fill").font(.headline); Spacer(); Button("打开") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) } }; QuickAddPanel(); Divider(); Text("今天").font(.headline); ForEach(store.tasks.filter { !$0.deleted && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.prefix(8)) { task in HStack { Button { store.complete(task.id) } label: { Image(systemName: "circle") }.buttonStyle(.plain); Text(task.title).lineLimit(1) } }; Divider(); HStack { Text(focus.display).monospacedDigit(); Button(focus.running ? "暂停" : "专注") { if focus.running { focus.pause() } else { focus.start() } }; Button("退出") { NSApp.terminate(nil) } } }.padding().frame(width: 370) }
+    @EnvironmentObject var store: Store
+    @EnvironmentObject var focus: FocusTimer
+    @Environment(\.openWindow) private var openWindow
+    private var todayTasks: [TaskItem] { store.tasks.filter { !$0.deleted && !$0.completed && !$0.isTemplate && $0.archived != true && $0.due.map { Calendar.current.isDateInToday($0) } == true } }
+    private var focusTitle: String { focus.mode == "番茄" && focus.phase == "专注" ? "番茄专注" : focus.mode == "番茄" ? focus.phase : "正计时" }
+    private var focusAction: String { focus.running ? "暂停" : focus.elapsed > 0 ? "继续" : focus.phase == "专注" ? "开始专注" : "开始休息" }
+    var body: some View {
+        VStack(alignment: .leading,spacing: 16) {
+            HStack(spacing: 9) {
+                BrandIcon(size: 28).accessibilityHidden(true)
+                Text("Zilo").font(.system(size: 17,weight: .semibold))
+                Spacer(minLength: 8)
+                Button(action: openMain) {
+                    HStack(spacing: 5) { Text("打开"); Image(systemName: "arrow.up.right").font(.system(size: 10,weight: .medium)) }
+                        .font(.system(size: 12)).padding(.horizontal,9).frame(height: 28).contentShape(Rectangle())
+                }.buttonStyle(.plain).foregroundStyle(ListTheme.secondary).quietHover().accessibilityLabel("打开")
+                Menu { Button("退出 Zilo",role: .destructive) { NSApp.terminate(nil) } } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 14)).frame(width: 24,height: 28).contentShape(Rectangle())
+                }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().foregroundStyle(ListTheme.secondary).quietHover().accessibilityLabel("Zilo 菜单")
+            }
+            QuickAddPanel(embedded: true)
+            ListTheme.separator.frame(height: 0.5)
+            VStack(alignment: .leading,spacing: 10) {
+                HStack(spacing: 7) {
+                    Text("今天").font(.system(size: 13,weight: .semibold))
+                    Text("\(todayTasks.count)").font(.system(size: 11,weight: .medium)).monospacedDigit().foregroundStyle(ListTheme.secondary)
+                        .padding(.horizontal,6).padding(.vertical,2).background(ListTheme.input,in: Capsule())
+                        .accessibilityLabel(ZiloLanguage.format("%lld 项",todayTasks.count))
+                    Spacer()
+                }
+                if todayTasks.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle").font(.system(size: 20,weight: .light)).foregroundStyle(ListTheme.accent)
+                            .frame(width: 36,height: 36).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 10))
+                        VStack(alignment: .leading,spacing: 4) {
+                            Text("今天没有待办").font(.system(size: 12,weight: .medium))
+                            Text("从上方添加，开始安排今天。").font(.system(size: 11)).foregroundStyle(ListTheme.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }.padding(.vertical,8)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 2) { ForEach(Array(todayTasks.prefix(8))) { task in todayRow(task) } }
+                    }.frame(height: min(CGFloat(min(todayTasks.count,8)) * 38,220))
+                }
+            }
+            HStack(spacing: 10) {
+                Image(systemName: "timer").font(.system(size: 22,weight: .light)).foregroundStyle(ListTheme.accent).frame(width: 28)
+                VStack(alignment: .leading,spacing: 3) {
+                    Text(LocalizedStringKey(focusTitle)).font(.system(size: 11)).foregroundStyle(ListTheme.secondary)
+                    Text(focus.display).font(.system(size: 23,weight: .medium,design: .rounded)).monospacedDigit()
+                }
+                Spacer(minLength: 8)
+                Button { if focus.running { focus.pause() } else { focus.start() } } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: focus.running ? "pause.fill" : "play.fill").font(.system(size: 10))
+                        Text(LocalizedStringKey(focusAction))
+                    }.font(.system(size: 12,weight: .medium)).padding(.horizontal,11).frame(height: 32)
+                        .foregroundStyle(.white).background(ListTheme.accent,in: RoundedRectangle(cornerRadius: 8))
+                }.buttonStyle(.plain)
+            }.padding(12).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 12))
+        }.padding(16).frame(width: 360).background(ListTheme.canvas).foregroundStyle(ListTheme.text)
+            .environment(\.locale,ZiloLanguage.locale)
+    }
+    private func todayRow(_ task: TaskItem) -> some View {
+        HStack(spacing: 6) {
+            Button { store.complete(task.id) } label: {
+                Image(systemName: "circle").font(.system(size: 16)).foregroundStyle(ListTheme.secondary)
+                    .frame(width: 28,height: 32).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel(ZiloLanguage.text("完成任务") + "：" + task.title)
+            Text(task.title).font(.system(size: 13)).lineLimit(1)
+            Spacer(minLength: 4)
+            if let due = task.due,!task.allDay { Text(due.formatted(date: .omitted,time: .shortened)).font(.system(size: 11)).foregroundStyle(ListTheme.secondary) }
+        }.padding(.horizontal,4).frame(height: 36).quietHover()
+    }
+    private func openMain() { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
 }
 struct StickyView: View { @EnvironmentObject var store: Store; var listID: UUID? = nil; @State private var input = ""; var body: some View { VStack(alignment: .leading) { Text(store.lists.first { $0.id == listID }?.name ?? "今天要做").font(.title2.bold()); TextField("添加任务",text: $input).onSubmit { store.add(listID == nil ? input + " 今天" : input,listID: listID); input = "" }; ScrollView { ForEach(store.tasks.filter { !$0.deleted && !$0.completed && !$0.isTemplate && (listID != nil ? $0.listID == listID : $0.due.map { Calendar.current.isDateInToday($0) } == true) }) { task in HStack { Button { store.complete(task.id) } label: { Image(systemName: "circle") }.buttonStyle(.plain); Text(task.title); Spacer() }.padding(.vertical,8) } } }.padding().background(Color.yellow.opacity(0.12)) } }
 /// A theme changes navigation surfaces and controls, independently of list colors.
