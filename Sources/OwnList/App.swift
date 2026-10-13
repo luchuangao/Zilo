@@ -109,7 +109,7 @@ struct QuickAddPanel: View {
                 Button(action: add) {
                     HStack(spacing: 8) { Text("添加"); Image(systemName: "return").font(.system(size: 10,weight: .medium)) }
                         .font(.system(size: 12,weight: .semibold)).padding(.horizontal,12).frame(height: 30)
-                        .foregroundStyle(canAdd ? Color.white : ListTheme.secondary.opacity(0.65))
+                        .foregroundStyle(canAdd ? ListTheme.adaptive(0xFFFFFF,0x202126) : ListTheme.secondary.opacity(0.65))
                         .background(canAdd ? ListTheme.accent : ListTheme.input,in: RoundedRectangle(cornerRadius: 8))
                 }.buttonStyle(.plain).disabled(!canAdd)
             }
@@ -210,7 +210,7 @@ struct MenuPanel: View {
                         Image(systemName: focus.running ? "pause.fill" : "play.fill").font(.system(size: 10))
                         Text(LocalizedStringKey(focusAction))
                     }.font(.system(size: 12,weight: .medium)).padding(.horizontal,11).frame(height: 32)
-                        .foregroundStyle(.white).background(ListTheme.accent,in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundStyle(ListTheme.adaptive(0xFFFFFF,0x202126)).background(ListTheme.accent,in: RoundedRectangle(cornerRadius: 8))
                 }.buttonStyle(.plain)
             }.padding(12).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 12))
         }.padding(16).frame(width: 360).background(ListTheme.canvas).foregroundStyle(ListTheme.text)
