@@ -278,6 +278,7 @@ struct AppTheme: Identifiable {
         case "rail": return id == "default" ? (dark ? 0x191A1F : 0xF4F5F7) : dark ? Self.blend(bottom,0x14151B,0.55) : bottom
         case "railForeground": return id == "default" ? (dark ? 0xB1B5C0 : 0x656B78) : (!dark && Self.luminance(bottom) > 0.30 ? 0x242730 : 0xFFFFFF)
         case "sidebar": return id == "default" ? (dark ? 0x24252B : 0xFBFBFC) : Self.blend(dark ? 0x24252B : 0xFFFFFF,bottom,dark ? 0.12 : 0.08)
+        case "sidebarHover": return Self.blend(value("sidebar",dark: dark),dark ? 0xFFFFFF : 0x000000,dark ? 0.07 : 0.05)
         case "input": return Self.blend(dark ? 0x2B2D35 : 0xF4F5F7,bottom,dark ? 0.08 : 0.04)
         case "selection": return Self.blend(dark ? 0x343743 : 0xFFFFFF,bottom,dark ? 0.23 : 0.17)
         case "hover": return Self.blend(dark ? 0x2D2F38 : 0xFFFFFF,bottom,dark ? 0.14 : 0.08)
@@ -307,6 +308,7 @@ enum ListTheme {
     static var rail: Color { themed("rail") }
     static var railForeground: Color { themed("railForeground") }
     static var sidebar: Color { themed("sidebar") }
+    static var sidebarHover: Color { themed("sidebarHover") }
     static var input: Color { themed("input") }
     static var selection: Color { themed("selection") }
     static var hover: Color { themed("hover") }
@@ -356,8 +358,23 @@ struct QuietHover: ViewModifier {
             .onHover { hovering = $0 }
     }
 }
+struct SidebarHover: ViewModifier {
+    var selected: Bool
+    @AppStorage("accent") private var accent = "blue"
+    @State private var hovering = false
+    func body(content: Content) -> some View {
+        content
+            .background(selected ? ListTheme.selection : hovering ? ListTheme.sidebarHover : .clear,in: RoundedRectangle(cornerRadius: 8))
+            // Passive native tracking also sees pointer movement over the list's drag surface.
+            .background { TaskRowHover { hovering = $0 } }
+            .onHover { hovering = $0 }
+            .onChange(of: accent) { _,_ in }
+            .onDisappear { hovering = false }
+    }
+}
 extension View {
     func quietHover(selected: Bool = false,rail: Bool = false) -> some View { modifier(QuietHover(selected: selected,rail: rail)) }
+    func sidebarHover(selected: Bool = false) -> some View { modifier(SidebarHover(selected: selected)) }
     func themeAppearance() -> some View { modifier(ThemeAppearance()) }
 }
 struct QuietEmptyState: View {

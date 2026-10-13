@@ -297,7 +297,7 @@ struct MainView: View {
                 if let color { Circle().fill(color).frame(width: 7,height: 7) }
                 if count > 0 { Text("\(count)").font(.system(size: 11)).monospacedDigit().foregroundStyle(ListTheme.secondary) }
             }.padding(.horizontal,12).frame(minHeight: 36).contentShape(Rectangle())
-        }.buttonStyle(.plain).foregroundStyle(ListTheme.text).quietHover(selected: selection == key)
+        }.buttonStyle(.plain).foregroundStyle(ListTheme.text)
             .overlay {
                 if key.hasPrefix("list:") {
                     TaskDragHandle(payload: "zilo-list:" + key.dropFirst(5),visible: false,onBegin: {},
@@ -306,6 +306,7 @@ struct MainView: View {
                         .help("拖动调整清单顺序或文件夹")
                 }
             }
+            .sidebarHover(selected: selection == key)
             .id(key).accessibilityAddTraits(selection == key ? .isSelected : [])
     }
     func nav(_ text: String,_ icon: String,_ key: String) -> some View { sidebarChoice(text,icon,key,count: key == "trash" ? store.trashEntryCount : ["completed","archived"].contains(key) ? filtered(key).count : filtered(key).filter { !$0.completed }.count) }

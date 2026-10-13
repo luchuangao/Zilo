@@ -36,10 +36,20 @@ final class DocumentConsistencyTests: XCTestCase {
         for theme in AppTheme.all {
             for dark in [false,true] {
                 XCTAssertGreaterThanOrEqual(contrast(theme.value("railForeground",dark: dark),theme.value("rail",dark: dark)),3,"Navigation: \(theme.id), dark=\(dark)")
-                for surface in ["canvas","sidebar","input","selection","hover"] {
+                for surface in ["canvas","sidebar","sidebarHover","input","selection","hover"] {
                     XCTAssertGreaterThanOrEqual(contrast(theme.value("text",dark: dark),theme.value(surface,dark: dark)),4.5,"Text on \(surface): \(theme.id), dark=\(dark)")
                 }
                 XCTAssertGreaterThanOrEqual(contrast(theme.value("accent",dark: dark),theme.value("canvas",dark: dark)),4.5,"Accent: \(theme.id), dark=\(dark)")
+            }
+        }
+    }
+    func testSidebarHoverRemainsVisibleAcrossThemesAndAppearances() {
+        for theme in AppTheme.all {
+            for dark in [false,true] {
+                let background = AppTheme.luminance(theme.value("sidebar",dark: dark))
+                let hover = AppTheme.luminance(theme.value("sidebarHover",dark: dark))
+                XCTAssertGreaterThan((max(background,hover) + 0.05) / (min(background,hover) + 0.05),1.08,"Visible hover: \(theme.id), dark=\(dark)")
+                XCTAssertEqual(hover > background,dark,"Hover must lighten dark sidebars and darken light sidebars")
             }
         }
     }
