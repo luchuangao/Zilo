@@ -2,6 +2,53 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
+/// Local navigation preferences; task data continues to live in the shared store.
+struct MacWorkspaceState: Codable, Equatable {
+    var module = Module.tasks.rawValue
+    var selection = "today"
+    var taskID: UUID?
+    var sidebarVisible = true
+    var detailsVisible = true
+    var viewMode = "列表"
+    var sort = "手动"
+    var showCompleted = true
+    var parallel = false
+
+    static func saved(defaults: UserDefaults = .standard) -> Self? {
+        guard let data = defaults.data(forKey: "lastMacWorkspace") else { return nil }
+        return try? JSONDecoder().decode(Self.self,from: data)
+    }
+    static func launch(defaults: UserDefaults = .standard) -> Self {
+        if defaults.object(forKey: "restoreLastWorkspace") as? Bool != false,let saved = saved(defaults: defaults) { return saved }
+        return Self(module: defaults.string(forKey: "startupModule") ?? Module.tasks.rawValue,
+                    selection: defaults.string(forKey: "startupSmartList") ?? "today")
+    }
+    func save(defaults: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(self) { defaults.set(data,forKey: "lastMacWorkspace") }
+    }
+    func validated(selections: Set<String>,fallback: String,modules: ModulePreferences) -> Self {
+        var result = self
+        let target = Module(rawValue: module) ?? .tasks
+        result.module = modules.isVisible(target) ? target.rawValue : Module.tasks.rawValue
+        if !selections.contains(selection) {
+            result.selection = selections.contains(fallback) ? fallback : selections.contains("today") ? "today" : selections.sorted().first ?? "all"
+            result.taskID = nil
+        }
+        if !["列表","看板","时间线"].contains(viewMode) { result.viewMode = "列表" }
+        if !["手动","日期","优先级","标题","创建时间"].contains(sort) { result.sort = "手动" }
+        return result
+    }
+    func task(in tasks: [TaskItem],visibleRoots: Set<UUID>) -> UUID? {
+        guard let taskID,let selected = tasks.first(where: { $0.id == taskID && !$0.deleted }) else { return nil }
+        var current = selected,visited = Set<UUID>()
+        while let parentID = current.parentID {
+            guard visited.insert(current.id).inserted,let parent = tasks.first(where: { $0.id == parentID }) else { return nil }
+            current = parent
+        }
+        return visibleRoots.contains(current.id) ? taskID : nil
+    }
+}
+
 struct ListEditorRequest: Identifiable { let id = UUID(); var existing: TaskList? }
 struct MainView: View {
     @AppStorage("smartListVisibility") private var rawSmartVisibility = ""
@@ -10,8 +57,8 @@ struct MainView: View {
     @State private var profileMenuVisible = false
     @State private var syncPanelVisible = false; @State private var notificationPanelVisible = false
     @AppStorage("moduleVisibility") private var moduleVisibility = ""
-    @AppStorage("startupModule") private var startupModule = Module.tasks.rawValue
     @AppStorage("startupSmartList") private var startupSmartList = "today"
+    @State private var launchState: MacWorkspaceState
     @State private var didInitialize = false
     @State private var module: Module = .tasks; @State private var selection = "today"; @State private var search = ""; @State private var viewMode = "列表"; @State private var sort = "手动"; @State private var showCompleted = true; @State private var parallel = false
     @ObservedObject private var dragFeedback = TaskDragFeedback.shared
@@ -25,6 +72,23 @@ struct MainView: View {
     @FocusState private var sidebarFocused: Bool
     @State private var listEditorRequest: ListEditorRequest?; @State private var expandedFolders = Set<String>(); @State private var showFilter = false; @State private var editFilter: SavedFilter?; @State private var importPreview: ImportPreview?; @State private var showImport = false
     @AppStorage("fontScale") var fontScale = 14.0; @AppStorage("accent") var accent = "blue"
+    init() {
+        let state = MacWorkspaceState.launch()
+        _launchState = State(initialValue: state)
+        _module = State(initialValue: Module(rawValue: state.module) ?? .tasks)
+        _selection = State(initialValue: state.selection)
+        _sidebarVisible = State(initialValue: state.sidebarVisible)
+        _detailsVisible = State(initialValue: state.detailsVisible)
+        _viewMode = State(initialValue: state.viewMode)
+        _sort = State(initialValue: state.sort)
+        _showCompleted = State(initialValue: state.showCompleted)
+        _parallel = State(initialValue: state.parallel)
+    }
+    private var workspaceState: MacWorkspaceState {
+        MacWorkspaceState(module: module.rawValue,selection: selection,taskID: store.selectedTask,
+                          sidebarVisible: sidebarVisible,detailsVisible: detailsVisible,viewMode: viewMode,
+                          sort: sort,showCompleted: showCompleted,parallel: parallel)
+    }
     var body: some View {
         let _ = accent
         GeometryReader { geometry in
@@ -85,7 +149,8 @@ struct MainView: View {
             } else { Group { switch module { case .calendar: CalendarView(); case .matrix: MatrixView(); case .focus: FocusView(); case .habits: HabitsView(); case .countdown: CountdownView(); case .stats: StatisticsView(); case .tasks: EmptyView() } }.frame(maxWidth: .infinity,maxHeight: .infinity) }
         }.frame(maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
         }.ignoresSafeArea(.container,edges: .top).background(WindowChrome()).background(ListTheme.canvas).foregroundStyle(ListTheme.text).font(.system(size: fontScale)).themeAppearance().frame(minWidth: (parallel ? 1240 : 1000),minHeight: 620)
-            .onAppear { guard !didInitialize else { return }; didInitialize = true; selection = startupSmartList; module = Module(rawValue: startupModule) ?? .tasks; if !ModulePreferences(rawValue: moduleVisibility).isVisible(module) { module = .tasks }; reconcileSidebarSelection() }
+            .onAppear(perform: restoreWorkspace)
+            .onChange(of: workspaceState) { _,state in if didInitialize { state.save() } }
             .onChange(of: store.notificationTask) { _,id in if let id { openNotificationTask(id); store.notificationTask = nil } }
             .onChange(of: store.notificationModule) { _,target in if let target { module = target; store.notificationModule = nil } }
             .onChange(of: moduleVisibility) { _,_ in if !ModulePreferences(rawValue: moduleVisibility).isVisible(module) { module = .tasks } }
@@ -105,6 +170,20 @@ struct MainView: View {
             .sheet(isPresented: $showFilter) { FilterEditor(existing: editFilter).environmentObject(store) }
             .sheet(isPresented: $showImport) { if let preview = importPreview { ImportView(preview: preview).environmentObject(store) } }
             .alert("操作未完成",isPresented: Binding(get: { store.error != nil },set: { if !$0 { store.error = nil } })) { Button("好") { store.error = nil } } message: { Text(store.error ?? "") }
+    }
+    private func restoreWorkspace() {
+        guard !didInitialize else { return }
+        let state = launchState.validated(selections: Set(sidebarKeys).union(["all","starred","templates","archived"]),fallback: startupSmartList,modules: ModulePreferences(rawValue: moduleVisibility))
+        module = Module(rawValue: state.module) ?? .tasks
+        selection = state.selection
+        viewMode = state.viewMode
+        sort = state.sort
+        if let list = store.lists.first(where: { $0.id == selectedListID }),!list.folder.isEmpty { expandedFolders.insert(list.folder) }
+        if UserDefaults.standard.object(forKey: "restoreLastWorkspace") as? Bool != false,MacWorkspaceState.saved() != nil {
+            store.selectedTask = state.task(in: store.tasks,visibleRoots: Set(filtered(selection).map(\.id)))
+        }
+        didInitialize = true
+        workspaceState.save()
     }
     func openNotificationTask(_ id: UUID) {
         guard let task = store.tasks.first(where: { $0.id == id }) else { return }

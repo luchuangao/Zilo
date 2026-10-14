@@ -4,6 +4,46 @@ import PDFKit
 @testable import OwnList
 
 final class DocumentConsistencyTests: XCTestCase {
+    func testMacWorkspaceSurvivesRelaunchAndSupportsFixedStartup() throws {
+        let suite = "ZiloWorkspaceTests-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let state = MacWorkspaceState(module: Module.tasks.rawValue,selection: "list:" + UUID().uuidString,taskID: UUID(),sidebarVisible: false,detailsVisible: true,viewMode: "看板",sort: "日期",showCompleted: false,parallel: true)
+        state.save(defaults: defaults)
+        XCTAssertEqual(MacWorkspaceState.launch(defaults: try XCTUnwrap(UserDefaults(suiteName: suite))),state)
+        defaults.set(false,forKey: "restoreLastWorkspace")
+        defaults.set(Module.calendar.rawValue,forKey: "startupModule")
+        defaults.set("inbox",forKey: "startupSmartList")
+        let fixed = MacWorkspaceState.launch(defaults: defaults)
+        XCTAssertEqual(fixed.module,Module.calendar.rawValue)
+        XCTAssertEqual(fixed.selection,"inbox")
+        XCTAssertNil(fixed.taskID)
+        defaults.set(true,forKey: "restoreLastWorkspace")
+        XCTAssertEqual(MacWorkspaceState.launch(defaults: defaults),state)
+        defaults.set(Data("corrupted session".utf8),forKey: "lastMacWorkspace")
+        XCTAssertEqual(MacWorkspaceState.launch(defaults: defaults),fixed)
+    }
+    func testMacWorkspaceFallsBackWhenListOrModuleIsUnavailable() {
+        let hidden = ModulePreferences(rawValue: "").updating(.habits,to: false)
+        let old = MacWorkspaceState(module: Module.habits.rawValue,selection: "list:" + UUID().uuidString,taskID: UUID())
+        let restored = old.validated(selections: ["today","inbox"],fallback: "inbox",modules: ModulePreferences(rawValue: hidden))
+        XCTAssertEqual(restored.module,Module.tasks.rawValue)
+        XCTAssertEqual(restored.selection,"inbox")
+        XCTAssertNil(restored.taskID)
+        XCTAssertEqual(old.validated(selections: ["today"],fallback: "removed",modules: ModulePreferences(rawValue: "")).selection,"today")
+    }
+    func testMacWorkspaceRestoresSubtaskOnlyInItsVisibleTree() {
+        let root = TaskItem(title: "Parent")
+        var child = TaskItem(title: "Child",parentID: root.id)
+        let state = MacWorkspaceState(taskID: child.id)
+        XCTAssertEqual(state.task(in: [root,child],visibleRoots: [root.id]),child.id)
+        XCTAssertNil(state.task(in: [root,child],visibleRoots: []))
+        child.deleted = true
+        XCTAssertNil(state.task(in: [root,child],visibleRoots: [root.id]))
+        child.deleted = false; child.parentID = child.id
+        XCTAssertNil(state.task(in: [root,child],visibleRoots: [root.id]),"Invalid parent cycles must not hang launch")
+        XCTAssertNil(state.task(in: [root],visibleRoots: [root.id]))
+    }
     @MainActor func testWholeRowDragSurfacePreservesTitleAndCompletionControls() {
         let host = NSView(frame: NSRect(x: 0,y: 0,width: 400,height: 80))
         let surface = TaskDragHandleView(frame: host.bounds); host.addSubview(surface)

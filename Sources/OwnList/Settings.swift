@@ -17,6 +17,7 @@ struct SettingsView: View {
     @AppStorage("moduleVisibility") private var moduleVisibility = ""
     @AppStorage("startupModule") private var startupModule = Module.tasks.rawValue
     @AppStorage("startupSmartList") private var startupSmartList = "today"
+    @AppStorage("restoreLastWorkspace") private var restoreLastWorkspace = true
     @AppStorage("showCountdownsToday") private var showCountdownsToday = true
     @AppStorage("showMenuBar") private var showMenuBar = true
     @AppStorage("completionSound") private var completionSound = false
@@ -95,10 +96,12 @@ struct SettingsView: View {
                         .onChange(of: interfaceLanguage) { _,value in ZiloLanguage.select(value) }
                 }
                 note("切换语言后，请重新打开 Zilo。")
+                settingToggle("启动时恢复上次页面",$restoreLastWorkspace)
+                note("恢复上次打开的模块、清单、任务详情和侧栏布局。关闭后使用固定启动页。")
                 SettingsRow("启动时打开") {
                     SettingsValuePicker("启动时打开",selection: $startupModule,choices: Module.allCases.filter { ModulePreferences(rawValue: moduleVisibility).isVisible($0) }.map { ($0.rawValue,$0.rawValue) })
-                }
-                SettingsRow("默认任务视图") { SettingsValuePicker("默认任务视图",selection: $startupSmartList,choices: SmartListOption.primary.map { ($0.title,$0.id) }) }
+                }.disabled(restoreLastWorkspace)
+                SettingsRow("默认任务视图") { SettingsValuePicker("默认任务视图",selection: $startupSmartList,choices: SmartListOption.primary.map { ($0.title,$0.id) }) }.disabled(restoreLastWorkspace)
                 settingToggle("登录时启动",$login).onChange(of: login) { _,value in do { if value { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() } } catch { login = SMAppService.mainApp.status == .enabled; status = error.localizedDescription } }
                 settingToggle("在菜单栏显示 Zilo",$showMenuBar)
                 settingToggle("在今天显示倒数纪念日",$showCountdownsToday)

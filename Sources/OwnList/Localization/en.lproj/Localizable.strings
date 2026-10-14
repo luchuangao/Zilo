@@ -770,3 +770,7 @@
 "Markdown 侧栏预览" = "Markdown Sidebar Preview";
 "今天没有待办" = "No tasks for today";
 "从上方添加，开始安排今天。" = "Add a task above to plan your day.";
+
+"启动时恢复上次页面" = "Restore last page on launch";
+
+"恢复上次打开的模块、清单、任务详情和侧栏布局。关闭后使用固定启动页。" = "Restore the last module, list, task details and sidebar layout. Turn off to use a fixed start page.";
