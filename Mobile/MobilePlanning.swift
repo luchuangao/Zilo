@@ -90,8 +90,7 @@ struct MobileMatrixView: View {
         HStack { Text(LocalizedStringKey(titles[selected])).font(.headline).foregroundStyle(colors[selected]); Spacer() }.padding(.top,8)
         if store.active.filter({ quadrant($0) == selected }).isEmpty { MobileEmpty(title: "没有任务",detail: "调整任务优先级与日期，即可安排到对应象限。",icon: "square.grid.2x2") }
         ForEach(store.active.filter { quadrant($0) == selected }) { task in
-            MobileTaskRow(task: task).padding(.vertical,8)
-                .contextMenu { ForEach(0..<4,id: \.self) { index in Button("移到" + titles[index]) { store.mutate(task.id) { item in item.priority = index < 2 ? 2 : 0; if index == 0 || index == 2 { item.due = Calendar.current.date(bySettingHour: 23,minute: 59,second: 0,of: Date()) } else if item.due.map({ $0 < Calendar.current.date(byAdding: .day,value: 1,to: Calendar.current.startOfDay(for: Date()))! }) == true { item.due = Calendar.current.date(byAdding: .day,value: 7,to: item.due!) } } } } }
+            MobileTaskRow(task: task,quadrantActions: true).padding(.vertical,8)
             Divider()
         }
     }.padding(18) }.navigationTitle("四象限").navigationBarTitleDisplayMode(.inline) }
@@ -223,9 +222,30 @@ struct MobileStatisticsView: View {
 }
 struct MobileMoreView: View {
     @AppStorage("moduleVisibility") private var modules = ""
-    @Environment(\.mobileAccent) private var appAccent
-    var body: some View { NavigationStack { List {
-        Section { if ModulePreferences(rawValue: modules).isVisible(.matrix) { NavigationLink { MobileMatrixView() } label: { Label("四象限",systemImage: "square.grid.2x2") } }; if ModulePreferences(rawValue: modules).isVisible(.countdown) { NavigationLink { MobileCountdownView() } label: { Label("倒数纪念日",systemImage: "calendar.badge.clock") } }; NavigationLink { MobileStatisticsView() } label: { Label("统计与回顾",systemImage: "chart.bar") } }
-        Section { NavigationLink { MobileNotificationInbox() } label: { Label("通知与活动",systemImage: "bell") }; NavigationLink { MobileSettings() } label: { Label("设置",systemImage: "gearshape") } }
-    }.navigationTitle("更多") } }
+    @EnvironmentObject private var store: MobileStore
+    var body: some View {
+        NavigationStack(path: $store.morePath) {
+            List {
+                Section {
+                    if ModulePreferences(rawValue: modules).isVisible(.matrix) { NavigationLink(value: "matrix") { Label("四象限",systemImage: "square.grid.2x2") } }
+                    if ModulePreferences(rawValue: modules).isVisible(.countdown) { NavigationLink(value: "countdown") { Label("倒数纪念日",systemImage: "calendar.badge.clock") } }
+                    NavigationLink(value: "statistics") { Label("统计与回顾",systemImage: "chart.bar") }
+                }
+                Section {
+                    NavigationLink(value: "notifications") { Label("通知与活动",systemImage: "bell") }
+                    NavigationLink(value: "settings") { Label("设置",systemImage: "gearshape") }
+                }
+            }.navigationTitle("更多")
+                .navigationDestination(for: String.self) { page in
+                    switch page {
+                    case "matrix": MobileMatrixView()
+                    case "countdown": MobileCountdownView()
+                    case "statistics": MobileStatisticsView()
+                    case "notifications": MobileNotificationInbox()
+                    case "settings": MobileSettings()
+                    default: EmptyView()
+                    }
+                }
+        }
+    }
 }

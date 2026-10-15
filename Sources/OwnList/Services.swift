@@ -86,6 +86,13 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     func changeMode(_ value: String) { guard !running && elapsed == 0 else { return }; mode = value; phase = "专注"; prior = 0; deadline = nil; remaining = phaseLength; persist() }
     var phaseLength: Double { Double((phase == "专注" ? minutes : rounds % 4 == 0 ? longBreakMinutes : breakMinutes) * 60) }
     func start() { guard !running else { return }; started = now(); if sessionStarted == nil { sessionStarted = started }; running = true; if mode == "番茄" { deadline = now().addingTimeInterval(max(1,phaseLength - prior)); rescheduleNotification() }; persist(); tick() }
+    @discardableResult func startTask(_ id: UUID,mode requestedMode: String) -> Bool {
+        guard ["番茄","正计时"].contains(requestedMode) else { return false }
+        if running || elapsed > 0 {
+            guard taskID == id,mode == requestedMode,phase == "专注" else { return false }
+        } else { changeMode(requestedMode); taskID = id }
+        start(); return true
+    }
     func rescheduleNotification() { guard notifications else { return }; if running,mode == "番茄",let deadline { NotificationService.shared.focusDeadline(deadline,phase: phase) } else { NotificationService.shared.cancelFocusDeadline() } }
     func pause() { tick(); guard running else { return }; prior = elapsed; running = false; started = nil; deadline = nil; rescheduleNotification(); persist() }
     func tick() {

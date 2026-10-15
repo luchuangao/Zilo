@@ -2,7 +2,7 @@ import Foundation
 
 enum Scheduling {
     static func isOverdue(_ task: TaskItem,now: Date = Date(),calendar: Calendar = .current) -> Bool {
-        guard !task.completed, !task.deleted, let due = task.due else { return false }
+        guard task.isPendingTask, let due = task.due else { return false }
         return task.allDay ? calendar.startOfDay(for: due) < calendar.startOfDay(for: now) : due < now
     }
 
@@ -16,7 +16,7 @@ enum Scheduling {
 /// Shared rules for matrix grouping and drag scheduling, using local calendar days.
 enum TaskMatrix {
     enum Group: String,CaseIterable { case overdue = "已过期", today = "今天", upcoming = "未来", undated = "无日期", completed = "已完成" }
-    static func isVisible(_ task: TaskItem) -> Bool { !task.deleted && !task.isTemplate && task.archived != true && task.parentID == nil }
+    static func isVisible(_ task: TaskItem) -> Bool { !task.deleted && !task.isTemplate && task.archived != true && task.abandoned != true && task.isNote != true && task.parentID == nil }
     static func index(_ task: TaskItem,now: Date = Date(),calendar: Calendar = .current) -> Int {
         let important = task.priority >= 2
         let tomorrow = calendar.date(byAdding: .day,value: 1,to: calendar.startOfDay(for: now))!

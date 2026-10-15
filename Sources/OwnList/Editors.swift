@@ -121,8 +121,8 @@ struct TaskDetailView: View {
     }
     func header(_ task: TaskItem) -> some View {
         HStack(spacing: 12) {
-            Button { store.complete(task.id) } label: { Image(systemName: task.completed ? "checkmark.square.fill" : "square").font(.system(size: 19)).foregroundStyle(task.completed ? Color.accentColor : ListTheme.secondary) }
-                .accessibilityLabel(task.completed ? "取消完成" : "完成任务").frame(width: 22,height: 30)
+            Button { store.complete(task.id) } label: { Image(systemName: task.isNote == true ? "doc.text" : task.abandoned == true ? "xmark.square" : task.completed ? "checkmark.square.fill" : "square").font(.system(size: 19)).foregroundStyle(task.completed ? Color.accentColor : ListTheme.secondary) }
+                .disabled(task.isNote == true || task.abandoned == true).accessibilityLabel(task.isNote == true ? "笔记" : task.abandoned == true ? "已放弃" : task.completed ? "取消完成" : "完成任务").frame(width: 22,height: 30)
             Rectangle().fill(ListTheme.separator).frame(width: 1,height: 20)
             Button { showDate.toggle() } label: {
                 Label(task.due.map { $0.formatted(date: .numeric,time: task.allDay ? .omitted : .shortened) } ?? "设置日期",systemImage: "calendar")

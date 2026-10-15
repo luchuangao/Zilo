@@ -46,6 +46,8 @@ struct TaskItem: ListRecord, Hashable {
     var trashedWithList: UUID?; var trashedWithParent: UUID?; var checks: [CheckItem] = []; var attachments: [Attachment] = []
     var created = Date(); var order: Double = Date().timeIntervalSince1970; var isTemplate = false
     var archived: Bool?; var special = ""; var sourceID: String?
+    var pinned: Bool?; var abandoned: Bool?; var isNote: Bool?
+    var isPendingTask: Bool { !deleted && !completed && !isTemplate && archived != true && abandoned != true && isNote != true }
 }
 struct CheckItem: Codable, Hashable, Identifiable { var id = UUID(); var title: String; var done = false; var due: Date?; var reminders: [Double]? }
 struct PlannedReminder: Identifiable, Equatable {
@@ -68,7 +70,7 @@ extension TaskItem {
         }
     }
     func plannedReminders(after now: Date = Date()) -> [PlannedReminder] {
-        guard !deleted, !completed, !isTemplate, archived != true else { return [] }
+        guard isPendingTask else { return [] }
         var result: [PlannedReminder] = []
         if let due {
             for offset in Set(reminders.filter { $0.isFinite && $0 >= 0 }).sorted() {
@@ -212,7 +214,7 @@ enum TaskHierarchy {
             guard visited.insert(task.id).inserted else { return }
             result.append(Row(task: task,depth: depth))
             guard !collapsed.contains(task.id) else { return }
-            for child in (children[task.id] ?? []).sorted(by: { $0.order == $1.order ? $0.created < $1.created : $0.order < $1.order }) { append(child,depth: depth + 1) }
+            for child in (children[task.id] ?? []).sorted(by: { if ($0.pinned == true) != ($1.pinned == true) { return $0.pinned == true }; return $0.order == $1.order ? $0.created < $1.created : $0.order < $1.order }) { append(child,depth: depth + 1) }
         }
         append(root,depth: 0); return result
     }
@@ -299,6 +301,7 @@ struct SmartListOption: Identifiable {
         .init(id:"filters",title:"过滤器",icon:"line.3.horizontal.decrease",initial:.show)]
     static let secondary: [Self] = [
         .init(id:"completed",title:"已完成",icon:"checkmark.square",initial:.show),
+        .init(id:"abandoned",title:"已放弃",icon:"xmark.square",initial:.show),
         .init(id:"archived",title:"归档任务",icon:"archivebox",initial:.hide),
         .init(id:"trash",title:"回收站",icon:"trash",initial:.show)]
     static var all: [Self] { primary + organization + secondary }
@@ -324,6 +327,39 @@ struct ModulePreferences {
     private var values: [String:Bool] { guard let data = rawValue.data(using: .utf8) else { return [:] }; return (try? JSONDecoder().decode([String:Bool].self,from: data)) ?? [:] }
     func isVisible(_ module: Module) -> Bool { module == .tasks || module == .stats || values[module.rawValue] != false }
     func updating(_ module: Module,to visible: Bool) -> String { var changed = values; changed[module.rawValue] = visible; return String(data: (try? JSONEncoder().encode(changed)) ?? Data(),encoding: .utf8) ?? "" }
+}
+
+/// Mobile navigation stays local to the device, independently of task synchronization.
+struct MobileWorkspaceState: Codable, Equatable {
+    var module = "tasks"
+    var selection = "today"
+    var listID: UUID?
+    var taskID: UUID?
+    var morePath: [String] = []
+    var showCompleted = false
+    static func launch(defaults: UserDefaults = .standard) -> Self {
+        if defaults.object(forKey: "restoreLastWorkspace") as? Bool != false,
+           let data = defaults.data(forKey: "lastMobileWorkspace"),let state = try? JSONDecoder().decode(Self.self,from: data) { return state }
+        return Self(module: defaults.string(forKey: "mobileStartupModule") ?? "tasks",selection: defaults.string(forKey: "mobileStartupSmartList") ?? "today")
+    }
+    func save(defaults: UserDefaults = .standard) { if let data = try? JSONEncoder().encode(self) { defaults.set(data,forKey: "lastMobileWorkspace") } }
+    func validated(tasks: [TaskItem],lists: [TaskList],filters: [SavedFilter],visibility: ModulePreferences) -> Self {
+        var result = self
+        let modules: [String:Module] = ["tasks":.tasks,"calendar":.calendar,"focus":.focus,"habits":.habits]
+        if module != "more" && (modules[module] == nil || !visibility.isVisible(modules[module]!)) { result.module = "tasks" }
+        let keys = Set(SmartListOption.primary.map(\.id) + SmartListOption.secondary.map(\.id))
+        let valid: Bool
+        if selection == "list" { valid = lists.contains { $0.id == listID && !$0.deleted } }
+        else if selection.hasPrefix("filter:") { valid = filters.contains { "filter:" + $0.id.uuidString == selection && !$0.deleted } }
+        else if selection.hasPrefix("tag:") { valid = tasks.contains { !$0.deleted && $0.tags.contains(String(selection.dropFirst(4))) } }
+        else { valid = keys.contains(selection) }
+        if !valid { result.selection = "today"; result.listID = nil; result.taskID = nil }
+        if result.selection != "list" { result.listID = nil }
+        if !tasks.contains(where: { $0.id == result.taskID && !$0.deleted }) { result.taskID = nil }
+        let destinations = ["matrix","countdown","statistics","notifications","settings"]
+        result.morePath = Array(morePath.prefix(while: { destinations.contains($0) && ($0 != "matrix" || visibility.isVisible(.matrix)) && ($0 != "countdown" || visibility.isVisible(.countdown)) }))
+        return result
+    }
 }
 enum TaskCreationPreferences {
     static func parse(_ input: String,defaults: UserDefaults = .standard,now: Date = Date(),calendar: Calendar = .current) -> ParsedTask {

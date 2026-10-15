@@ -388,9 +388,9 @@ struct MainView: View {
             .sidebarHover(selected: selection == key)
             .id(key).accessibilityAddTraits(selection == key ? .isSelected : [])
     }
-    func nav(_ text: String,_ icon: String,_ key: String) -> some View { sidebarChoice(text,icon,key,count: key == "trash" ? store.trashEntryCount : ["completed","archived"].contains(key) ? filtered(key).count : filtered(key).filter { !$0.completed }.count) }
+    func nav(_ text: String,_ icon: String,_ key: String) -> some View { sidebarChoice(text,icon,key,count: key == "trash" ? store.trashEntryCount : ["completed","archived","abandoned"].contains(key) ? filtered(key).count : filtered(key).filter { $0.isPendingTask }.count) }
     func listRow(_ list: TaskList) -> some View {
-        let count = store.tasks.filter { $0.listID == list.id && !$0.deleted && !$0.completed && !$0.isTemplate && $0.archived != true && $0.parentID == nil }.count
+        let count = store.tasks.filter { $0.listID == list.id && $0.isPendingTask && $0.parentID == nil }.count
         return sidebarChoice(list.name,"line.3.horizontal","list:" + list.id.uuidString,color: list.color == "none" ? nil : list.color.listColor,count: count)
             .contextMenu { Button("编辑清单") { listEditorRequest = ListEditorRequest(existing: list) }; Button("删除清单",role: .destructive) { if store.deleteList(list.id) { selection = "trash" } } }
             .overlay(alignment: dragFeedback.state?.listAfter == true ? .bottom : .top) { if dragFeedback.state?.listTarget == list.id { ListTheme.accent.frame(height: 2).allowsHitTesting(false) } }
@@ -400,10 +400,10 @@ struct MainView: View {
             },activePayload: { dragFeedback.state?.payload }))
     }
     var selectedListID: UUID? { selection.hasPrefix("list:") ? UUID(uuidString: String(selection.dropFirst(5))) : nil }
-    var title: String { switch selection { case "today": return ZiloLanguage.text("今天"); case "tomorrow": return ZiloLanguage.text("明天"); case "week": return ZiloLanguage.text("最近 7 天"); case "inbox": return ZiloLanguage.text("收集箱"); case "all": return ZiloLanguage.text("全部任务"); case "completed": return ZiloLanguage.text("已完成"); case "archived": return ZiloLanguage.text("归档任务"); case "trash": return ZiloLanguage.text("回收站"); case "starred": return ZiloLanguage.text("收藏"); case "templates": return ZiloLanguage.text("任务模板"); default: if let id = selectedListID { return store.lists.first { $0.id == id }?.name ?? "清单" }; if selection.hasPrefix("tag:") { return "#" + selection.dropFirst(4) }; return store.filters.first { "filter:" + $0.id.uuidString == selection }?.name ?? "任务" } }
+    var title: String { switch selection { case "today": return ZiloLanguage.text("今天"); case "tomorrow": return ZiloLanguage.text("明天"); case "week": return ZiloLanguage.text("最近 7 天"); case "inbox": return ZiloLanguage.text("收集箱"); case "all": return ZiloLanguage.text("全部任务"); case "completed": return ZiloLanguage.text("已完成"); case "archived": return ZiloLanguage.text("归档任务"); case "abandoned": return ZiloLanguage.text("已放弃"); case "trash": return ZiloLanguage.text("回收站"); case "starred": return ZiloLanguage.text("收藏"); case "templates": return ZiloLanguage.text("任务模板"); default: if let id = selectedListID { return store.lists.first { $0.id == id }?.name ?? "清单" }; if selection.hasPrefix("tag:") { return "#" + selection.dropFirst(4) }; return store.filters.first { "filter:" + $0.id.uuidString == selection }?.name ?? "任务" } }
     func filtered(_ key: String) -> [TaskItem] {
         store.tasks.filter { t in
-            if key == "trash" { return t.deleted }; guard !t.deleted else { return false }
+            if key == "trash" { return t.deleted }; guard !t.deleted else { return false }; if key == "abandoned" { return t.abandoned == true && !t.isTemplate && (t.parentID == nil || !store.tasks.contains { $0.id == t.parentID && $0.abandoned == true && !$0.deleted }) }; guard t.abandoned != true else { return false }
             if key == "archived" { return t.archived == true }; if key == "templates" { return t.isTemplate && t.parentID == nil }; guard t.archived != true else { return false }; guard !t.isTemplate && t.parentID == nil else { return false }
             switch key { case "today": return t.due.map { $0 < Calendar.current.date(byAdding: .day,value: 1,to: Calendar.current.startOfDay(for: Date()))! } == true && !t.completed
             case "tomorrow": return t.due.map { Calendar.current.isDateInTomorrow($0) } == true && !t.completed
@@ -415,7 +415,7 @@ struct MainView: View {
             default: if key.hasPrefix("list:") { return t.listID?.uuidString == String(key.dropFirst(5)) }; if key.hasPrefix("tag:") { return t.tags.contains(String(key.dropFirst(4))) }; if let filter = store.filters.first(where: { "filter:" + $0.id.uuidString == key }) { return filter.matches(t) }; return false }
         }
     }
-    var sortedTasks: [TaskItem] { (searchVisible && searchAll ? store.tasks.filter { !$0.deleted && !$0.isTemplate } : filtered(selection)).filter { searchVisible ? searchCriteria.matches($0,query: search) : true }.sorted { a,b in switch sort { case "日期": return (a.due ?? .distantFuture) < (b.due ?? .distantFuture); case "优先级": return a.priority > b.priority; case "标题": return a.title.localizedStandardCompare(b.title) == .orderedAscending; case "创建时间": return a.created > b.created; default: return a.order < b.order } } }
+    var sortedTasks: [TaskItem] { (searchVisible && searchAll ? store.tasks.filter { !$0.deleted && !$0.isTemplate } : filtered(selection)).filter { searchVisible ? searchCriteria.matches($0,query: search) : true }.sorted { a,b in if (a.pinned == true) != (b.pinned == true) { return a.pinned == true }; switch sort { case "日期": return (a.due ?? .distantFuture) < (b.due ?? .distantFuture); case "优先级": return a.priority > b.priority; case "标题": return a.title.localizedStandardCompare(b.title) == .orderedAscending; case "创建时间": return a.created > b.created; default: return a.order < b.order } } }
     func importFile() { let p = NSOpenPanel(); p.allowedContentTypes = [.json,.commaSeparatedText,.plainText]; if p.runModal() == .OK, let url = p.url { do { importPreview = try ImportService.preview(url); showImport = true } catch { store.error = error.localizedDescription } } }
     func renameFolder(_ old: String) { let alert = NSAlert(); alert.messageText = ZiloLanguage.text("重命名文件夹"); let field = NSTextField(string: old); field.frame = NSRect(x: 0,y: 0,width: 260,height: 24); alert.accessoryView = field; alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消"); if alert.runModal() == .alertFirstButtonReturn { for var list in store.lists.filter({ $0.folder == old }) { list.folder = field.stringValue.trimmingCharacters(in: .whitespaces); store.save(list) } } }
 }
@@ -441,7 +441,7 @@ struct TaskWorkspace: View {
     var body: some View {
         let _ = applicationTheme
  VStack(spacing: 0) {
-        if !isTrash && creationContext != "completed" && creationContext != "archived" { HStack { Image(systemName: "plus"); TextField(entryPlaceholder,text: $input).foregroundStyle(ListTheme.text).textFieldStyle(.plain).focused($inputFocused).onSubmit { addTask(section: entrySection) } }.foregroundStyle(ListTheme.secondary).padding(.horizontal,12).frame(height: 40).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 9)).padding(.horizontal,20).padding(.top,6).padding(.bottom,8) }
+        if !isTrash && creationContext != "completed" && creationContext != "archived" && creationContext != "abandoned" { HStack { Image(systemName: "plus"); TextField(entryPlaceholder,text: $input).foregroundStyle(ListTheme.text).textFieldStyle(.plain).focused($inputFocused).onSubmit { addTask(section: entrySection) } }.foregroundStyle(ListTheme.secondary).padding(.horizontal,12).frame(height: 40).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 9)).padding(.horizontal,20).padding(.top,6).padding(.bottom,8) }
         if batchMode && !multi.isEmpty { HStack { Text("已选 \(multi.count) 项"); Menu("移动") { Button("收集箱") { store.move(multi,to: nil) }; ForEach(store.lists.filter { !$0.deleted }) { l in Button(l.name) { store.move(multi,to: l.id) } } }; Menu("优先级") { ForEach(0...3,id: \.self) { p in Button("\(p)") { batch { $0.priority = p } } } }; Button("今天") { batch { $0.due = Calendar.current.startOfDay(for: Date()) } }; Button("完成") { let before = store.backup; for id in multi { store.complete(id) }; store.groupUndo(before) }; Button("删除",role: .destructive) { batch { $0.deleted = true }; multi = [] } }.font(.caption).padding(8) }
         if todayCountdowns.isEmpty && visible.isEmpty && trashLists.isEmpty && (viewMode != "列表" || (store.lists.first { $0.id == listID }?.sections.isEmpty ?? true)) { QuietEmptyState(title: isTrash ? "回收站为空" : "清单很清爽",message: "把想做的事情记下来，一件一件完成。",symbol: "checkmark.circle") }
         else if viewMode == "看板" && !isTrash { ScrollView(.horizontal) { HStack(alignment: .top,spacing: 12) { ForEach(["待安排","进行中","已完成"],id: \.self) { column in VStack(alignment: .leading) { Text(column).font(.headline).padding(10); ForEach(visible.filter { column == "已完成" ? $0.completed : column == "进行中" ? !$0.completed && $0.start != nil : !$0.completed && $0.start == nil }) { t in row(t).padding(10).background(.background,in: RoundedRectangle(cornerRadius: 10)) }; Spacer() }.padding(8).frame(width: 260).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 10)).dropDestination(for: String.self) { values,_ in for raw in values { if let id = UUID(uuidString: raw) { store.mutate(id) { $0.completed = column == "已完成"; $0.completedAt = $0.completed ? Date() : nil; $0.start = column == "进行中" ? Date() : nil } } }; return true } } }.padding(20) } }
@@ -522,7 +522,7 @@ struct TaskWorkspace: View {
     func reorder(_ section: String,_ from: IndexSet,_ to: Int) { guard sort == "手动" else { return }; var data = visible.filter { !$0.completed && $0.section == section }; data.move(fromOffsets: from,toOffset: to); let before = store.backup; for (index,t) in data.enumerated() { store.mutate(t.id) { $0.order = Double(index) } }; store.groupUndo(before) }
     func hierarchyRows(_ root: TaskItem) -> some View {
         VStack(alignment: .leading,spacing: 0) {
-            ForEach(isTrash ? [TaskHierarchy.Row(task: root,depth: 0)] : TaskHierarchy.rows(root: root,tasks: store.tasks,collapsed: collapsedTasks)) { entry in
+            ForEach(isTrash ? [TaskHierarchy.Row(task: root,depth: 0)] : TaskHierarchy.rows(root: root,tasks: store.tasks.filter { creationContext == "abandoned" || $0.abandoned != true },collapsed: collapsedTasks)) { entry in
                 row(entry.task).padding(.leading,CGFloat(entry.depth) * 24)
             }
             if !isTrash,
@@ -564,7 +564,7 @@ struct TaskWorkspace: View {
         editingTitle = nil
     }
     func taskTitle(_ task: TaskItem) -> some View {
-        TaskNameField(title: task.title,completed: task.completed,fontSize: taskFontSize,
+        TaskNameField(title: task.title,completed: task.completed || task.abandoned == true,fontSize: taskFontSize,
             requestFocus: editingTitle == task.id,
             onBegin: { store.selectedTask = task.id; collapsedTasks.remove(task.id); editingTitle = task.id },
             onEnd: { value in
@@ -600,7 +600,7 @@ struct TaskWorkspace: View {
                 .accessibilityLabel(collapsedTasks.contains(t.id) ? "展开子任务" : "收起子任务")
         } else { Color.clear.frame(width: 24,height: 20) }
         if batchMode { Toggle("选择",isOn: Binding(get: { multi.contains(t.id) },set: { if $0 { multi.insert(t.id) } else { multi.remove(t.id) } })).labelsHidden().toggleStyle(.checkbox) }
-        Button { store.complete(t.id) } label: { Image(systemName: t.completed ? "checkmark.square.fill" : "square").font(.system(size: 17)).foregroundStyle(t.completed ? ListTheme.secondary.opacity(0.7) : t.priority == 3 ? "red".listColor : t.priority == 2 ? "orange".listColor : t.priority == 1 ? Color.accentColor : ListTheme.secondary) }.buttonStyle(.plain).accessibilityLabel(t.completed ? "取消完成" : "完成任务")
+        Button { store.complete(t.id) } label: { Image(systemName: t.isNote == true ? "doc.text" : t.abandoned == true ? "xmark.square" : t.completed ? "checkmark.square.fill" : "square").font(.system(size: 17)).foregroundStyle(t.completed ? ListTheme.secondary.opacity(0.7) : t.priority == 3 ? "red".listColor : t.priority == 2 ? "orange".listColor : t.priority == 1 ? Color.accentColor : ListTheme.secondary) }.buttonStyle(.plain).disabled(t.isNote == true || t.abandoned == true).accessibilityLabel(t.isNote == true ? "笔记" : t.abandoned == true ? "已放弃" : t.completed ? "取消完成" : "完成任务")
         VStack(alignment: .leading,spacing: 5) {
             HStack(spacing: 8) {
                 taskTitle(t)
@@ -630,7 +630,7 @@ struct TaskWorkspace: View {
                 }.font(.caption).foregroundStyle(ListTheme.secondary)
             }
         }
-        Spacer(); if t.starred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
+        Spacer(); if t.pinned == true { Image(systemName: "pin.fill").font(.system(size: 11)).foregroundStyle(ListTheme.secondary).accessibilityLabel("已置顶") }; if t.starred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
     }.padding(.vertical,10).padding(.leading,16).padding(.trailing,4).background { RoundedRectangle(cornerRadius: 8).fill(store.selectedTask == t.id ? ListTheme.selection : hoveredTaskHandle == t.id ? ListTheme.hover : .clear).padding(.leading,12) }.background { TaskRowHover { hoveredTaskHandle = $0 ? t.id : (hoveredTaskHandle == t.id ? nil : hoveredTaskHandle) } }.overlay(alignment: .bottom) { if store.selectedTask != t.id { ListTheme.separator.frame(height: 0.5).padding(.leading,57) } }.contentShape(Rectangle()).background { GeometryReader { proxy in Color.clear.onAppear { rowHeights[t.id] = proxy.size.height }.onChange(of: proxy.size.height) { _,height in rowHeights[t.id] = height } } }
         .overlay {
             TaskDragHandle(payload: t.id.uuidString,visible: false,onBegin: finishRenaming,
@@ -655,24 +655,13 @@ struct TaskWorkspace: View {
             guard !isTrash, let id = UUID(uuidString: raw) else { return }
             finishRenaming()
             if store.placeTask(id,relativeTo: t.id,position: dropPosition(point,task: t)) { collapsedTasks.remove(t.id); store.selectedTask = id; onManualSort?() }
-        },activePayload: { dragFeedback.state?.payload })).contextMenu {
-        Button("打开详情") { store.selectedTask = t.id }; Button("修改名称") { startRenaming(t) }; Button(batchMode ? "结束批量编辑" : "批量编辑") { batchMode.toggle(); multi = [] }; Button(t.starred ? "取消收藏" : "收藏") { store.mutate(t.id) { $0.starred.toggle() } }
-        if t.parentID != nil {
-            Button("移为顶层任务",systemImage: "arrow.up.left") {
-                finishRenaming()
-                if store.promoteTask(t.id) { store.selectedTask = t.id; onManualSort?() }
-            }
-        }
-        if t.isTemplate { Button("从模板创建任务") { store.duplicate(t.id) } }
-        else { Button(t.archived == true ? "取消归档" : "归档") { store.mutate(t.id) { $0.archived = t.archived != true } }; Button("保存为模板") { store.duplicate(t.id,asTemplate: true) }; Button("复制") { store.duplicate(t.id) } }
-        if t.deleted { Button("恢复") { store.restoreTask(t.id) } } else { Button("移入回收站",role: .destructive) { store.mutate(t.id) { $0.deleted = true } } }
-    } }
+        },activePayload: { dragFeedback.state?.payload })).taskContextMenu(t.id,rename: { startRenaming(t) },batch: { batchMode.toggle(); multi = [] },childAdded: { collapsedTasks.remove(t.id) }) }
 }
 struct TimelineViewContent: View {
     @Environment(\.openWindow) private var openWindow
     @EnvironmentObject var store: Store; var tasks: [TaskItem]
     var body: some View { ScrollView([.horizontal,.vertical]) { VStack(alignment: .leading,spacing: 12) { HStack { Text("任务").frame(width: 180,alignment: .leading); ForEach(0..<14,id: \.self) { i in Text(Calendar.current.date(byAdding: .day,value: i,to: Calendar.current.startOfDay(for: Date()))!,format: .dateTime.month().day()).frame(width: 60) } }
-        ForEach(tasks) { t in HStack(spacing: 0) { Text(t.title).lineLimit(1).frame(width: 180,alignment: .leading).onTapGesture(count: 2) { openWindow(id: "task-detail",value: t.id); NSApp.activate(ignoringOtherApps: true) }.onTapGesture { store.selectedTask = t.id }; ForEach(0..<14,id: \.self) { i in let day = Calendar.current.date(byAdding: .day,value: i,to: Calendar.current.startOfDay(for: Date()))!; let active = t.due.map { Calendar.current.startOfDay(for: $0) >= day && Calendar.current.startOfDay(for: t.start ?? $0) <= day } ?? false; Rectangle().fill(active ? Color.accentColor.opacity(t.completed ? 0.25 : 0.75) : Color.gray.opacity(0.05)).frame(width: 64,height: 25).dropDestination(for: String.self) { values,_ in for raw in values { if let id = UUID(uuidString: raw) { store.mutate(id) { $0.due = day } } }; return true } } }.draggable(t.id.uuidString) }
+        ForEach(tasks) { t in HStack(spacing: 0) { Text(t.title).lineLimit(1).frame(width: 180,alignment: .leading).onTapGesture(count: 2) { openWindow(id: "task-detail",value: t.id); NSApp.activate(ignoringOtherApps: true) }.onTapGesture { store.selectedTask = t.id }; ForEach(0..<14,id: \.self) { i in let day = Calendar.current.date(byAdding: .day,value: i,to: Calendar.current.startOfDay(for: Date()))!; let active = t.due.map { Calendar.current.startOfDay(for: $0) >= day && Calendar.current.startOfDay(for: t.start ?? $0) <= day } ?? false; Rectangle().fill(active ? Color.accentColor.opacity(t.completed ? 0.25 : 0.75) : Color.gray.opacity(0.05)).frame(width: 64,height: 25).dropDestination(for: String.self) { values,_ in for raw in values { if let id = UUID(uuidString: raw) { store.mutate(id) { $0.due = day } } }; return true } } }.draggable(t.id.uuidString).taskContextMenu(t.id) }
     }.padding(20) } }
 }
 

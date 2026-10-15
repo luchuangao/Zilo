@@ -9,6 +9,9 @@ struct MobileSettings: View {
     @AppStorage("appearance") private var appearance = "system"
     @AppStorage("interfaceLanguage") private var interfaceLanguage = "system"
     @AppStorage("showCountdownsToday") private var showCountdownsToday = true
+    @AppStorage("restoreLastWorkspace") private var restoreLastWorkspace = true
+    @AppStorage("mobileStartupModule") private var startupModule = "tasks"
+    @AppStorage("mobileStartupSmartList") private var startupView = "today"
     @AppStorage("cloudEnabled") private var cloud = true
     @AppStorage("recognizeDates") private var dates = true
     @AppStorage("removeDateText") private var removeDate = true
@@ -34,6 +37,12 @@ struct MobileSettings: View {
             NavigationLink("智能清单") { MobileSmartListSettings() }
             Toggle("在今天显示倒数纪念日",isOn: $showCountdownsToday)
             Toggle("识别日期和时间",isOn: $dates); Toggle("移除任务名中的日期",isOn: $removeDate); Toggle("移除任务名中的标签",isOn: $removeTag)
+        }
+        Section("启动") {
+            Toggle("启动时恢复上次页面",isOn: $restoreLastWorkspace)
+            Text("恢复上次打开的模块、清单和任务详情。关闭后使用固定启动页。").font(.footnote).foregroundStyle(.secondary)
+            Picker("启动时打开",selection: $startupModule) { Text("任务").tag("tasks"); Text("日历").tag("calendar"); Text("专注").tag("focus"); Text("习惯").tag("habits"); Text("更多").tag("more") }.disabled(restoreLastWorkspace)
+            Picker("默认任务视图",selection: $startupView) { ForEach(SmartListOption.primary) { option in Text(LocalizedStringKey(option.title)).tag(option.id) } }.disabled(restoreLastWorkspace)
         }
         Section("同步与通知") {
             Toggle("iCloud 同步",isOn: $cloud)

@@ -23,7 +23,7 @@ struct CalendarView: View {
         .sheet(item: Binding(get: { editing.flatMap { id in store.tasks.first { $0.id == id } } },set: { editing = $0?.id })) { task in TaskDetailView(selection: $editing).environmentObject(store).environmentObject(service).frame(width: 450,height: 700) }
     }
     func advance(_ amount: Int) { date = Calendar.current.date(byAdding: mode == "年" ? .year : mode == "月" ? .month : mode == "周" || mode == "课表" ? .weekOfYear : .day,value: amount,to: date)! }
-    func dayTasks(_ day: Date) -> [TaskItem] { store.tasks.filter { !$0.deleted && !$0.isTemplate && $0.due.map { Calendar.current.isDate($0,inSameDayAs: day) } == true && (mode != "课表" || $0.special == "course") }.sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) } }
+    func dayTasks(_ day: Date) -> [TaskItem] { store.tasks.filter { !$0.deleted && !$0.isTemplate && $0.abandoned != true && $0.due.map { Calendar.current.isDate($0,inSameDayAs: day) } == true && (mode != "课表" || $0.special == "course") }.sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) } }
     func dayEvents(_ day: Date) -> [ExternalEvent] { service.events.filter { Calendar.current.isDate($0.start,inSameDayAs: day) } }
     func monthGrid(_ value: Date,mini: Bool) -> some View {
         let c = displayCalendar; let first = c.date(from: c.dateComponents([.year,.month],from: value))!; let leading = (c.component(.weekday,from: first) - c.firstWeekday + 7) % 7

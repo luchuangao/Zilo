@@ -4,6 +4,103 @@ import PDFKit
 @testable import OwnList
 
 final class DocumentConsistencyTests: XCTestCase {
+    @MainActor func testContextMenuHitRegionCannotExtendIntoAdjacentTaskRows() {
+        let host = NSView(frame: NSRect(x: 0,y: 0,width: 600,height: 800))
+        let child = TaskRowContextSurface.ContextSurface(frame: NSRect(x: 24,y: 100,width: 400,height: 40))
+        host.addSubview(child)
+        XCTAssertTrue(child.containsContextPoint(NSPoint(x: 100,y: 120)))
+        XCTAssertFalse(child.containsContextPoint(NSPoint(x: 100,y: 180)),"A child's unclipped visible region must not claim its parent row")
+        XCTAssertFalse(child.containsContextPoint(NSPoint(x: 100,y: 80)))
+    }
+    func testMobileWorkspaceRestoresMorePageAndTaskWithFixedStartupOption() throws {
+        let suite = "ZiloMobileWorkspace-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite)); defer { defaults.removePersistentDomain(forName: suite) }
+        let state = MobileWorkspaceState(module: "more",selection: "inbox",taskID: UUID(),morePath: ["countdown"],showCompleted: true)
+        state.save(defaults: defaults)
+        XCTAssertEqual(MobileWorkspaceState.launch(defaults: try XCTUnwrap(UserDefaults(suiteName: suite))),state)
+        defaults.set(false,forKey: "restoreLastWorkspace"); defaults.set("focus",forKey: "mobileStartupModule")
+        let fixed = MobileWorkspaceState.launch(defaults: defaults)
+        XCTAssertEqual(fixed.module,"focus"); XCTAssertNil(fixed.taskID); XCTAssertTrue(fixed.morePath.isEmpty)
+    }
+    func testMobileWorkspaceFallsBackForDeletedListTaskAndHiddenModule() {
+        let task = TaskItem(deleted: true,title: "Removed")
+        let state = MobileWorkspaceState(module: "habits",selection: "list",listID: UUID(),taskID: task.id,morePath: ["countdown"])
+        let hidden = ModulePreferences(rawValue: ModulePreferences(rawValue: "").updating(.habits,to: false)).updating(.countdown,to: false)
+        let restored = state.validated(tasks: [task],lists: [],filters: [],visibility: ModulePreferences(rawValue: hidden))
+        XCTAssertEqual(restored.module,"tasks"); XCTAssertEqual(restored.selection,"today")
+        XCTAssertNil(restored.listID); XCTAssertNil(restored.taskID); XCTAssertTrue(restored.morePath.isEmpty)
+    }
+    func testTaskMenuFieldsDecodeOldRecordsAndRoundTrip() throws {
+        let task = TaskItem(title: "Legacy task")
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(task)) as? [String:Any])
+        for key in ["pinned","abandoned","isNote"] { json.removeValue(forKey: key) }
+        let restored = try JSONDecoder().decode(TaskItem.self,from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertTrue(restored.isPendingTask)
+        var note = restored; note.isNote = true; note.pinned = true
+        XCTAssertEqual(try JSONDecoder().decode(TaskItem.self,from: JSONEncoder().encode(note)),note)
+    }
+    @MainActor func testAbandonTaskTreeStopsRemindersPreservesCompletedChildrenAndUndoesTogether() throws {
+        let store = Store(persistence: Persistence(inMemory: true))
+        let root = TaskItem(title: "Parent",due: Date().addingTimeInterval(3600),reminders: [0])
+        let child = TaskItem(title: "Child",due: root.due,reminders: [0],parentID: root.id)
+        let done = TaskItem(title: "Done",completed: true,completedAt: Date(),parentID: root.id)
+        for task in [root,child,done] { XCTAssertTrue(store.save(task)) }
+        XCTAssertTrue(store.setTaskAbandoned(root.id,to: true))
+        let changed = try XCTUnwrap(store.tasks.first { $0.id == root.id })
+        XCTAssertEqual(changed.abandoned,true); XCTAssertFalse(changed.deleted)
+        XCTAssertTrue(changed.plannedReminders().isEmpty)
+        XCTAssertEqual(store.tasks.first { $0.id == child.id }?.abandoned,true)
+        XCTAssertEqual(store.tasks.first { $0.id == done.id }?.completed,true)
+        store.undo()
+        XCTAssertNotEqual(store.tasks.first { $0.id == root.id }?.abandoned,true)
+        XCTAssertNotEqual(store.tasks.first { $0.id == child.id }?.abandoned,true)
+        XCTAssertFalse(try XCTUnwrap(store.tasks.first { $0.id == root.id }).plannedReminders().isEmpty)
+    }
+    @MainActor func testNoteConversionPreservesDocumentAndCanBeReversed() throws {
+        let store = Store(persistence: Persistence(inMemory: true))
+        var original = TaskItem(title: "Notes",notes: "Original Markdown",tags: ["work"],due: Date().addingTimeInterval(7200),reminders: [0])
+        original.richText = Data([1,2,3]); original.checks = [CheckItem(title: "Keep this",done: true)]
+        XCTAssertTrue(store.save(original)); XCTAssertTrue(store.setTaskNote(original.id,to: true))
+        let note = try XCTUnwrap(store.tasks.first { $0.id == original.id })
+        XCTAssertEqual(note.richText,original.richText); XCTAssertEqual(note.notes,original.notes)
+        XCTAssertEqual(note.checks,original.checks); XCTAssertEqual(note.tags,original.tags)
+        XCTAssertTrue(note.plannedReminders().isEmpty); XCTAssertFalse(note.isPendingTask)
+        store.complete(note.id); XCTAssertFalse(try XCTUnwrap(store.tasks.first { $0.id == note.id }).completed)
+        XCTAssertTrue(store.setTaskNote(note.id,to: false))
+        XCTAssertFalse(try XCTUnwrap(store.tasks.first { $0.id == note.id }).plannedReminders().isEmpty)
+    }
+    @MainActor func testContextDateUsesConsistentTimeBlockAndClearingRemovesReminders() throws {
+        let store = Store(persistence: Persistence(inMemory: true))
+        let due = Date().addingTimeInterval(7200)
+        let task = TaskItem(title: "Meeting",start: due.addingTimeInterval(-1800),due: due,allDay: false,reminders: [300])
+        XCTAssertTrue(store.save(task))
+        let newDue = due.addingTimeInterval(-86400)
+        XCTAssertTrue(store.setTaskDate(task.id,date: newDue,allDay: false))
+        let moved = try XCTUnwrap(store.tasks.first { $0.id == task.id })
+        XCTAssertEqual(moved.start,newDue.addingTimeInterval(-1800)); XCTAssertEqual(moved.reminders,[300])
+        XCTAssertTrue(store.setTaskDate(task.id,date: nil,allDay: true))
+        let cleared = try XCTUnwrap(store.tasks.first { $0.id == task.id })
+        XCTAssertNil(cleared.start); XCTAssertNil(cleared.due); XCTAssertTrue(cleared.reminders.isEmpty)
+    }
+    @MainActor func testContextFocusCannotReplaceAnotherRunningOrPausedTask() throws {
+        let suite = "ZiloContextFocus-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite)); defer { defaults.removePersistentDomain(forName: suite) }
+        var now = Date()
+        let timer = FocusTimer(defaults: defaults,now: { now },notifications: false)
+        let first = UUID(),second = UUID()
+        XCTAssertTrue(timer.startTask(first,mode: "番茄"))
+        now = now.addingTimeInterval(60); timer.tick()
+        XCTAssertFalse(timer.startTask(second,mode: "正计时")); XCTAssertEqual(timer.taskID,first)
+        timer.pause(); XCTAssertFalse(timer.startTask(second,mode: "番茄"))
+        XCTAssertTrue(timer.startTask(first,mode: "番茄")); XCTAssertEqual(timer.elapsed,60,accuracy: 0.1)
+        timer.stop(); XCTAssertTrue(timer.startTask(second,mode: "正计时")); XCTAssertEqual(timer.taskID,second)
+    }
+    func testPinnedSubtaskSortsFirstWithoutChangingParent() {
+        let root = TaskItem(title: "Parent")
+        let first = TaskItem(title: "First",parentID: root.id,order: 0)
+        let pinned = TaskItem(title: "Pinned",parentID: root.id,order: 1,pinned: true)
+        XCTAssertEqual(TaskHierarchy.rows(root: root,tasks: [root,first,pinned],collapsed: []).map(\.id),[root.id,pinned.id,first.id])
+    }
     func testMacWorkspaceSurvivesRelaunchAndSupportsFixedStartup() throws {
         let suite = "ZiloWorkspaceTests-" + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

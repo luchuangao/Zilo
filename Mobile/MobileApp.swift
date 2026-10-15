@@ -29,14 +29,15 @@ extension EnvironmentValues {
                     MobileNotifications.shared.onComplete = { id in Task { @MainActor in if store.tasks.first(where: { $0.id == id })?.completed == false { store.complete(id) } } }
                     MobileNotifications.shared.onCompleteCheck = { id,check in Task { @MainActor in store.mutate(id) { task in if let index = task.checks.firstIndex(where: { $0.id == check }) { task.checks[index].done = true } } } }
                     MobileNotifications.shared.onOpen = { info in Task { @MainActor in
-                        if let id = info["taskID"] as? String,let uuid = UUID(uuidString: id) { store.selectedModule = "tasks"; store.selectedTask = store.tasks.first { $0.id == uuid } }
+                        if let id = info["taskID"] as? String,let uuid = UUID(uuidString: id) { store.openTask(uuid) }
                         else if info["habitID"] != nil { store.selectedModule = "habits" }
                         else if info["countdownID"] != nil { store.selectedModule = "more" }
                         else if info["focus"] != nil { store.selectedModule = "focus" }
                     } }
                     await store.sync()
                 }
-                .onChange(of: scene) { _,value in if value == .active { timer.tick(); Task { await store.sync() } } else { timer.persist() } }
+                .onChange(of: scene) { _,value in store.persistWorkspace(); if value == .active { timer.tick(); Task { await store.sync() } } else { timer.persist() } }
+                .onOpenURL { url in if url.scheme == "ownlist",url.host == "task",let value = URLComponents(url: url,resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "id" })?.value,let id = UUID(uuidString: value) { store.openTask(id) } }
                 .alert("操作未完成",isPresented: Binding(get: { store.error != nil },set: { if !$0 { store.error = nil } })) { Button("好") { store.error = nil } } message: { Text(store.error ?? "") }
         }
     }
@@ -91,9 +92,11 @@ struct MobileAddTask: View {
 struct MobileTasksView: View {
     @Environment(\.mobileAccent) private var appAccent
     @EnvironmentObject var store: MobileStore
-    @State private var selection = "today"; @State private var listID: UUID?
+    private var selection: String { get { store.taskSelection } nonmutating set { store.taskSelection = newValue } }
+    private var listID: UUID? { get { store.taskListID } nonmutating set { store.taskListID = newValue } }
     @State private var sidebar = false; @State private var add = false; @State private var notifications = false; @State private var settings = false
-    @State private var search = ""; @State private var showCompleted = false; @State private var collapsed = Set<UUID>()
+    @State private var search = ""; @State private var collapsed = Set<UUID>()
+    private var showCompleted: Bool { get { store.showCompleted } nonmutating set { store.showCompleted = newValue } }
     @State private var advancedSearch = false
     @State private var searchCriteria = TaskSearchCriteria()
     @State private var countdownsExpanded = true
@@ -104,13 +107,15 @@ struct MobileTasksView: View {
     var title: String {
         if selection.hasPrefix("filter:"),let uuid = UUID(uuidString: String(selection.dropFirst(7))) { return store.filters.first { $0.id == uuid }?.name ?? "过滤器" }
         if selection.hasPrefix("tag:") { return "#" + String(selection.dropFirst(4)) }
-        return listID.flatMap { id in store.lists.first { $0.id == id }?.name } ?? ZiloLanguage.text((["all":"所有","today":"今天","tomorrow":"明天","week":"最近 7 天","inbox":"收集箱","starred":"收藏","completed":"已完成","trash":"回收站","archived":"归档任务"][selection] ?? "任务")) }
+        return listID.flatMap { id in store.lists.first { $0.id == id }?.name } ?? ZiloLanguage.text((["all":"所有","today":"今天","tomorrow":"明天","week":"最近 7 天","inbox":"收集箱","starred":"收藏","completed":"已完成","trash":"回收站","archived":"归档任务","abandoned":"已放弃"][selection] ?? "任务")) }
     var matching: [TaskItem] {
         store.tasks.filter { task in
             guard !task.isTemplate else { return false }
             if selection != "trash" && (!search.isEmpty || searchCriteria.isActive) { return searchCriteria.matches(task,query: search) }
             if selection == "trash" { return task.deleted && (search.isEmpty || task.title.localizedCaseInsensitiveContains(search)) }
             guard !task.deleted else { return false }
+            if selection == "abandoned" { return task.abandoned == true }
+            guard task.abandoned != true else { return false }
             if selection == "archived" { guard task.archived == true else { return false } } else { guard task.archived != true else { return false } }
             if !search.isEmpty && !(task.title + task.notes + task.tags.joined()).localizedCaseInsensitiveContains(search) { return false }
             if let listID { return task.listID == listID }
@@ -126,10 +131,10 @@ struct MobileTasksView: View {
                 if selection.hasPrefix("tag:") { return task.tags.contains(String(selection.dropFirst(4))) }
                 return true
             }
-        }.sorted { $0.order < $1.order }
+        }.sorted { if ($0.pinned == true) != ($1.pinned == true) { return $0.pinned == true }; return $0.order < $1.order }
     }
     var roots: [TaskItem] { let ids = Set(matching.map(\.id)); return matching.filter { $0.parentID == nil || !ids.contains($0.parentID!) } }
-    var rows: [TaskHierarchy.Row] { roots.filter { !$0.completed || selection == "completed" || selection == "trash" || showCompleted || !search.isEmpty || searchCriteria.isActive }.flatMap { root in TaskHierarchy.rows(root: root,tasks: store.tasks.filter { !$0.deleted && !$0.isTemplate && $0.archived != true },collapsed: collapsed) } }
+    var rows: [TaskHierarchy.Row] { roots.filter { !$0.completed || selection == "completed" || selection == "trash" || showCompleted || !search.isEmpty || searchCriteria.isActive }.flatMap { root in TaskHierarchy.rows(root: root,tasks: store.tasks.filter { !$0.deleted && !$0.isTemplate && $0.archived != true && (selection == "abandoned" || $0.abandoned != true) },collapsed: collapsed) } }
     var body: some View {
         NavigationStack {
             List {
@@ -149,7 +154,7 @@ struct MobileTasksView: View {
                         MobileTaskRow(task: row.task).padding(.leading,CGFloat(min(row.depth,5)) * 20)
                     }.listRowInsets(EdgeInsets(top: 8,leading: 16,bottom: 8,trailing: 16))
                         .swipeActions(edge: .trailing) { if row.task.deleted { Button("恢复") { store.restore(row.id) }.tint(.green) } else { Button("删除",role: .destructive) { store.trash(row.id) } } }
-                        .swipeActions(edge: .leading) { if !row.task.deleted { Button(row.task.completed ? "恢复" : "完成") { store.complete(row.id) }.tint(appAccent) } }
+                        .swipeActions(edge: .leading) { if !row.task.deleted && row.task.isNote != true && row.task.abandoned != true { Button(row.task.completed ? "恢复" : "完成") { store.complete(row.id) }.tint(appAccent) } }
                 }.onMove { offsets,destination in
                     let ids = rows.map(\.id); guard destination <= ids.count else { return }
                     for source in offsets { guard source < ids.count else { continue }; let targetIndex = destination == ids.count ? ids.count - 1 : destination; if ids[source] != ids[targetIndex] { store.place(ids[source],ids[targetIndex],destination == ids.count ? .after : .before) } }
@@ -165,13 +170,13 @@ struct MobileTasksView: View {
                     ToolbarItem(placement: .topBarLeading) { Button { sidebar = true } label: { Image(systemName: "line.3.horizontal").frame(width: 30,height: 30) }.accessibilityLabel("选择清单") }
                     ToolbarItemGroup(placement: .topBarTrailing) {
                         Button { notifications = true } label: { Image(systemName: "bell") }.accessibilityLabel("通知")
-                        Menu { Button("高级搜索",systemImage: "line.3.horizontal.decrease.circle") { advancedSearch = true }; Button(editing.isEditing ? "结束排序" : "调整顺序") { editing = editing.isEditing ? .inactive : .active }; Button("设置") { settings = true } } label: { Image(systemName: "ellipsis") }.accessibilityLabel("任务选项")
+                        Menu { Button("高级搜索",systemImage: "line.3.horizontal.decrease.circle") { advancedSearch = true }; Button(showCompleted ? "隐藏已完成" : "显示已完成") { showCompleted.toggle() }; Button(editing.isEditing ? "结束排序" : "调整顺序") { editing = editing.isEditing ? .inactive : .active }; Button("设置") { settings = true } } label: { Image(systemName: "ellipsis") }.accessibilityLabel("任务选项")
                     }
                 }.overlay(alignment: .bottomTrailing) {
                     if selection != "trash" { Button { add = true } label: { Image(systemName: "plus").font(.system(size: 26,weight: .medium)).foregroundStyle(.white).frame(width: 56,height: 56).background(appAccent,in: Circle()).shadow(color: appAccent.opacity(0.24),radius: 8,y: 4) }.padding(22).accessibilityLabel("添加任务") }
                 }
         }.sheet(isPresented: $add) { MobileAddTask(listID: listID,defaultDate: selection == "today" ? Calendar.current.startOfDay(for: Date()) : nil) }
-            .sheet(isPresented: $sidebar) { MobileSidebar(selection: $selection,listID: $listID).presentationDetents([.large]) }
+            .sheet(isPresented: $sidebar) { MobileSidebar(selection: $store.taskSelection,listID: $store.taskListID).presentationDetents([.large]) }
             .sheet(isPresented: $advancedSearch) { NavigationStack { MobileAdvancedSearch(criteria: $searchCriteria) } }
             .sheet(isPresented: $settings) { NavigationStack { MobileSettings() } }
             .sheet(isPresented: $notifications) { NavigationStack { MobileNotificationInbox() } }
@@ -181,16 +186,17 @@ struct MobileTaskRow: View {
     @Environment(\.mobileAccent) private var appAccent
     @EnvironmentObject var store: MobileStore
     var task: TaskItem
+    var quadrantActions = false
     var body: some View {
         HStack(alignment: .top,spacing: 12) {
             Button { if !task.deleted { store.complete(task.id) } } label: {
-                Image(systemName: task.completed ? "checkmark.square.fill" : "square").font(.system(size: 23,weight: .light))
+                Image(systemName: task.isNote == true ? "doc.text" : task.abandoned == true ? "xmark.square" : task.completed ? "checkmark.square.fill" : "square").font(.system(size: 23,weight: .light))
                     .foregroundStyle(task.completed ? appAccent : task.priority == 3 ? .red : task.priority == 2 ? .orange : task.priority == 1 ? appAccent : Color.secondary)
                     .frame(width: 26,height: 30)
-            }.buttonStyle(.borderless).accessibilityLabel(task.completed ? "恢复 \(task.title)" : "完成 \(task.title)")
+            }.buttonStyle(.borderless).disabled(task.isNote == true || task.abandoned == true).accessibilityLabel(task.isNote == true ? "笔记" : task.abandoned == true ? "已放弃" : task.completed ? "恢复 \(task.title)" : "完成 \(task.title)")
             Button { store.selectedTask = task } label: {
                 VStack(alignment: .leading,spacing: 5) {
-                    Text(task.title).font(.system(size: 16)).strikethrough(task.completed).foregroundStyle(task.completed ? Color.secondary : Color.primary).multilineTextAlignment(.leading)
+                    Text(task.title).font(.system(size: 16)).strikethrough(task.completed || task.abandoned == true).foregroundStyle(task.completed || task.abandoned == true ? Color.secondary : Color.primary).multilineTextAlignment(.leading)
                     if !task.notes.isEmpty { Text(task.notes.replacingOccurrences(of: "\n",with: " ")).font(.system(size: 12)).foregroundStyle(Color.secondary).lineLimit(1) }
                     HStack(spacing: 7) {
                         if let due = task.due { Text(due,format: .dateTime.month().day()).foregroundStyle(due < (task.allDay ? Calendar.current.startOfDay(for: Date()) : Date()) && !task.completed ? Color.red : appAccent) }
@@ -201,8 +207,9 @@ struct MobileTaskRow: View {
                     }.font(.system(size: 11)).foregroundStyle(Color.secondary)
                 }.frame(maxWidth: .infinity,alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.borderless)
+            if task.pinned == true { Image(systemName: "pin.fill").font(.system(size: 12)).foregroundStyle(.secondary).padding(.top,6).accessibilityLabel("已置顶") }
             if task.starred { Image(systemName: "star.fill").font(.system(size: 12)).foregroundStyle(.yellow).padding(.top,6) }
-        }.padding(.vertical,4)
+        }.padding(.vertical,4).mobileTaskMenu(task.id,quadrantActions: quadrantActions)
     }
 }
 struct MobileSidebar: View {
@@ -243,7 +250,7 @@ struct MobileSidebar: View {
         }.navigationTitle("清单").navigationBarTitleDisplayMode(.inline).toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
         }.sheet(item: $editingList) { list in NavigationStack { MobileListEditor(existing: list) } }.sheet(item: $editingFilter) { filter in NavigationStack { MobileFilterEditor(existing: filter) } }.sheet(isPresented: $newFilter) { NavigationStack { MobileFilterEditor() } }.sheet(isPresented: $newList) { NavigationStack { MobileListEditor() } }.sheet(isPresented: $settings) { NavigationStack { MobileSettings() } }
     }
-    func count(_ key: String) -> Int { switch key { case "today": return store.active.filter { $0.due.map { Calendar.current.isDateInToday($0) || $0 < Date() } == true }.count; case "tomorrow": return store.active.filter { $0.due.map { Calendar.current.isDateInTomorrow($0) } == true }.count; case "week": return store.active.filter { $0.due.map { $0 < Date().addingTimeInterval(7 * 86400) } == true }.count; case "inbox": return store.active.filter { $0.listID == nil }.count; case "starred": return store.active.filter(\.starred).count; case "completed": return store.tasks.filter { !$0.deleted && $0.completed }.count; case "trash": return store.tasks.filter(\.deleted).count; default: return store.active.count } }
+    func count(_ key: String) -> Int { switch key { case "today": return store.active.filter { $0.due.map { Calendar.current.isDateInToday($0) || $0 < Date() } == true }.count; case "tomorrow": return store.active.filter { $0.due.map { Calendar.current.isDateInTomorrow($0) } == true }.count; case "week": return store.active.filter { $0.due.map { $0 < Date().addingTimeInterval(7 * 86400) } == true }.count; case "inbox": return store.active.filter { $0.listID == nil }.count; case "starred": return store.active.filter(\.starred).count; case "completed": return store.tasks.filter { !$0.deleted && $0.completed }.count; case "abandoned": return store.tasks.filter { !$0.deleted && $0.abandoned == true }.count; case "trash": return store.tasks.filter(\.deleted).count; default: return store.active.count } }
 }
 struct MobileListEditor: View {
     @Environment(\.mobileAccent) private var appAccent

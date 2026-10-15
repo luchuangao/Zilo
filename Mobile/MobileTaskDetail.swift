@@ -20,7 +20,7 @@ struct MobileTaskDetail: View {
             ScrollView { VStack(alignment: .leading,spacing: 20) {
                 TextField("任务名称",text: field(\.title,""),axis: .vertical).font(.system(size: 25,weight: .semibold)).lineLimit(1...5).accessibilityLabel("任务名称")
                 HStack(spacing: 16) {
-                    Button { store.complete(id) } label: { Image(systemName: task.completed ? "checkmark.square.fill" : "square").font(.system(size: 23)) }.accessibilityLabel(task.completed ? "恢复任务" : "完成任务")
+                    Button { store.complete(id) } label: { Image(systemName: task.isNote == true ? "doc.text" : task.abandoned == true ? "xmark.square" : task.completed ? "checkmark.square.fill" : "square").font(.system(size: 23)) }.disabled(task.isNote == true || task.abandoned == true).accessibilityLabel(task.isNote == true ? "笔记" : task.abandoned == true ? "已放弃" : task.completed ? "恢复任务" : "完成任务")
                     Divider().frame(height: 22)
                     NavigationLink { MobileTaskOptions(id: id) } label: { Label(task.due.map { $0.formatted(date: .abbreviated,time: task.allDay ? .omitted : .shortened) } ?? "设置日期",systemImage: "calendar").font(.subheadline) }
                     Spacer(); Button { store.mutate(id) { $0.starred.toggle() } } label: { Image(systemName: task.starred ? "star.fill" : "star").foregroundStyle(task.starred ? Color.yellow : Color.secondary) }.accessibilityLabel("收藏任务")
@@ -51,10 +51,10 @@ struct MobileTaskDetail: View {
                 Divider()
                 ForEach(store.tasks.filter { !$0.deleted && $0.parentID == id }.sorted { $0.order < $1.order }) { child in
                     HStack(spacing: 12) {
-                        Button { store.complete(child.id) } label: { Image(systemName: child.completed ? "checkmark.square.fill" : "square").font(.system(size: 22)) }
+                        Button { store.complete(child.id) } label: { Image(systemName: child.isNote == true ? "doc.text" : child.abandoned == true ? "xmark.square" : child.completed ? "checkmark.square.fill" : "square").font(.system(size: 22)) }.disabled(child.isNote == true || child.abandoned == true)
                         TextField("子任务名称",text: Binding(get: { store.tasks.first { $0.id == child.id }?.title ?? "" },set: { value in store.mutate(child.id) { $0.title = value } })).strikethrough(child.completed)
                         NavigationLink { MobileTaskDetail(id: child.id) } label: { Image(systemName: "chevron.right").font(.caption) }
-                    }.padding(.vertical,5)
+                    }.padding(.vertical,5).mobileTaskMenu(child.id)
                 }
                 Button { addChild = true } label: { Label("添加子任务",systemImage: "plus") }.padding(.vertical,6)
                 if !task.attachments.isEmpty {
@@ -86,6 +86,7 @@ struct MobileTaskDetail: View {
                 .onChange(of: task.editingMode) { _,_ in preview = false }
                 .onChange(of: id) { _,_ in preview = false; previewHeight = 180 }
         } else { MobileEmpty(title: "任务暂不可用",detail: "同步完成后再试。",icon: "doc") } }
+            .onAppear { store.visibleTaskID = id }
     }
 }
 struct MobileTaskOptions: View {

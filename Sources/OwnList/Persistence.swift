@@ -155,7 +155,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
     }
     func reload() {
         do { if let failure = persistence.loadError { throw ServiceError.message(failure) }; if !persistence.inMemory { try persistence.restoreBlobs() }; tasks = try persistence.load(TaskItem.self); lists = try persistence.load(TaskList.self); filters = try persistence.load(SavedFilter.self); habits = try persistence.load(Habit.self); focus = try persistence.load(FocusRecord.self); subscriptions = try persistence.load(CalendarSubscription.self); countdowns = try persistence.load(Countdown.self); try migrateInlineDocumentImages() } catch { self.error = "读取数据失败：\(error.localizedDescription)" }
-        if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
+        if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { $0.isPendingTask && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
         WidgetSnapshot.write(tasks: tasks, lists: lists) }
     }
     var trashEntryCount: Int {
@@ -233,7 +233,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
     }
     private func updatePublished<T: ListRecord>(_ record: T) {
         func updated<R: ListRecord>(_ records: [R], _ record: R) -> [R] { var list = records; if let i = list.firstIndex(where: { $0.id == record.id }) { list[i] = record } else { list.append(record) }; return list }
-        if let r = record as? TaskItem { tasks = updated(tasks,r); if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count); WidgetSnapshot.write(tasks: tasks,lists: lists) } }
+        if let r = record as? TaskItem { tasks = updated(tasks,r); if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { $0.isPendingTask && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count); WidgetSnapshot.write(tasks: tasks,lists: lists) } }
         if let r = record as? TaskList { lists = updated(lists,r) }; if let r = record as? SavedFilter { filters = updated(filters,r) }; if let r = record as? Habit { habits = updated(habits,r) }; if let r = record as? FocusRecord { focus = updated(focus,r) }; if let r = record as? CalendarSubscription { subscriptions = updated(subscriptions,r) }; if let r = record as? Countdown { countdowns = updated(countdowns,r) }
     }
     @discardableResult func deleteList(_ id: UUID) -> Bool {
@@ -273,13 +273,37 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
             tasks = tasks.map { changes[$0.id] ?? $0 }
             groupUndo(before); redoStack.removeAll()
             if !persistence.inMemory {
-                DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
+                DesktopBridge.updateBadge(tasks.filter { $0.isPendingTask && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
                 WidgetSnapshot.write(tasks: tasks,lists: lists)
                 for task in changed { NotificationService.shared.schedule(task) }
             }
             if selectedTask.map({ id in changed.contains { $0.id == id && $0.deleted } }) == true { selectedTask = nil }
             return true
         } catch { self.error = error.localizedDescription; return false }
+    }
+    @discardableResult func setTaskAbandoned(_ id: UUID,to value: Bool) -> Bool {
+        guard let root = tasks.first(where: { $0.id == id && !$0.deleted }) else { return false }
+        let changed = TaskHierarchy.rows(root: root,tasks: tasks,collapsed: []).map { row -> TaskItem in
+            var task = row.task
+            if task.id != id && task.completed { return task }
+            task.abandoned = value
+            if value { task.archived = false }
+            if value { task.completed = false; task.completedAt = nil }
+            return task
+        }
+        return savePlacement(tasks: changed,lists: [])
+    }
+    @discardableResult func setTaskNote(_ id: UUID,to value: Bool) -> Bool {
+        guard var task = tasks.first(where: { $0.id == id && !$0.deleted }) else { return false }
+        task.isNote = value
+        if value { task.completed = false; task.completedAt = nil; task.abandoned = false }
+        return save(task)
+    }
+    @discardableResult func setTaskDate(_ id: UUID,date: Date?,allDay: Bool) -> Bool {
+        guard var task = tasks.first(where: { $0.id == id && !$0.deleted }) else { return false }
+        task.setDue(date); task.allDay = allDay; task.repeatRule.anchor = date
+        if date != nil && task.reminders.isEmpty { task.reminders = TaskCreationPreferences.reminders(allDay: allDay) }
+        return save(task)
     }
     @discardableResult func placeTask(_ source: UUID,relativeTo target: UUID,position: TaskPlacement.Position) -> Bool {
         guard let changed = TaskPlacement.changes(tasks,source: source,target: target,position: position) else { return false }
@@ -314,7 +338,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
             if !persistence.inMemory {
                 WidgetSnapshot.write(tasks: tasks,lists: lists)
                 for task in changedTasks { NotificationService.shared.schedule(task) }
-                DesktopBridge.updateBadge(tasks.filter { !$0.deleted && $0.archived != true && !$0.completed && !$0.isTemplate && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
+                DesktopBridge.updateBadge(tasks.filter { $0.isPendingTask && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
             }
             return true
         } catch { self.error = error.localizedDescription; return false }
@@ -358,7 +382,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         if task.due != nil { task.reminders = TaskCreationPreferences.reminders(allDay: task.allDay) }; guard save(task) else { return nil }; selectedTask = task.id; return task.id
     }
     func complete(_ id: UUID) {
-        guard var task = tasks.first(where: { $0.id == id }) else { return }
+        guard var task = tasks.first(where: { $0.id == id && $0.isNote != true && $0.abandoned != true }) else { return }
         let before = backup; task.completed.toggle(); task.completedAt = task.completed ? Date() : nil; task.checks = task.checks.map { var c = $0; c.done = task.completed; return c }; save(task)
         if task.completed && !persistence.inMemory && UserDefaults.standard.bool(forKey: "completionSound") { NSSound(named: "Pop")?.play() }
         completeChildren(task.id,completed: task.completed,visited: [task.id])
@@ -367,9 +391,9 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
             if !undoStack.isEmpty { undoStack[undoStack.count - 1] = before }
         }
     }
-    @discardableResult func duplicate(_ id: UUID,asTemplate: Bool = false) -> UUID? { guard var task = tasks.first(where: { $0.id == id }) else { return nil }; let before = backup; let oldID = task.id; task.id = UUID(); task.parentID = nil; task.sourceID = nil; task.completed = false; task.completedAt = nil; task.created = Date(); task.isTemplate = asTemplate; task.checks = task.checks.map { var c = $0; c.done = false; return c }; save(task); cloneChildren(from: oldID,to: task.id,asTemplate: asTemplate,dateShift: 0,visited: [oldID]); groupUndo(before); selectedTask = task.id; return task.id }
-    private func cloneChildren(from source: UUID,to destination: UUID,asTemplate: Bool,dateShift: Double,visited: Set<UUID>) { let originals = tasks.filter { $0.parentID == source && !$0.deleted }; for var child in originals { let oldID = child.id; guard !visited.contains(oldID) else { continue }; child.id = UUID(); child.parentID = destination; child.sourceID = nil; child.completed = false; child.completedAt = nil; child.isTemplate = asTemplate; child.due = child.due?.addingTimeInterval(dateShift); child.start = child.start?.addingTimeInterval(dateShift); child.checks = child.checks.map { var c = $0; c.done = false; c.due = c.due?.addingTimeInterval(dateShift); return c }; save(child,undoable: false); cloneChildren(from: oldID,to: child.id,asTemplate: asTemplate,dateShift: dateShift,visited: visited.union([oldID])) } }
-    private func completeChildren(_ id: UUID,completed: Bool,visited: Set<UUID>) { for var child in tasks.filter({ $0.parentID == id && !$0.deleted }) { guard !visited.contains(child.id) else { continue }; child.completed = completed; child.completedAt = completed ? Date() : nil; child.checks = child.checks.map { var check = $0; check.done = completed; return check }; save(child,undoable: false); completeChildren(child.id,completed: completed,visited: visited.union([child.id])) } }
+    @discardableResult func duplicate(_ id: UUID,asTemplate: Bool = false) -> UUID? { guard var task = tasks.first(where: { $0.id == id }) else { return nil }; let before = backup; let oldID = task.id; task.id = UUID(); task.parentID = nil; task.sourceID = nil; task.completed = false; task.completedAt = nil; task.abandoned = false; task.pinned = false; task.created = Date(); task.isTemplate = asTemplate; task.checks = task.checks.map { var c = $0; c.done = false; return c }; save(task); cloneChildren(from: oldID,to: task.id,asTemplate: asTemplate,dateShift: 0,visited: [oldID]); groupUndo(before); selectedTask = task.id; return task.id }
+    private func cloneChildren(from source: UUID,to destination: UUID,asTemplate: Bool,dateShift: Double,visited: Set<UUID>) { let originals = tasks.filter { $0.parentID == source && !$0.deleted }; for var child in originals { let oldID = child.id; guard !visited.contains(oldID) else { continue }; child.id = UUID(); child.parentID = destination; child.sourceID = nil; child.completed = false; child.completedAt = nil; child.abandoned = false; child.pinned = false; child.isTemplate = asTemplate; child.due = child.due?.addingTimeInterval(dateShift); child.start = child.start?.addingTimeInterval(dateShift); child.checks = child.checks.map { var c = $0; c.done = false; c.due = c.due?.addingTimeInterval(dateShift); return c }; save(child,undoable: false); cloneChildren(from: oldID,to: child.id,asTemplate: asTemplate,dateShift: dateShift,visited: visited.union([oldID])) } }
+    private func completeChildren(_ id: UUID,completed: Bool,visited: Set<UUID>) { for var child in tasks.filter({ $0.parentID == id && !$0.deleted && $0.isNote != true && $0.abandoned != true }) { guard !visited.contains(child.id) else { continue }; child.completed = completed; child.completedAt = completed ? Date() : nil; child.checks = child.checks.map { var check = $0; check.done = completed; return check }; save(child,undoable: false); completeChildren(child.id,completed: completed,visited: visited.union([child.id])) } }
     func move(_ ids: Set<UUID>, to list: UUID?) { let before = backup; for id in ids { mutate(id) { $0.listID = list } }; groupUndo(before) }
     func groupUndo(_ before: Backup) { undoStack = Array(undoStack.prefix(while: { $0.created < before.created })); undoStack.append(before) }
     func undo() { guard let prior = undoStack.popLast() else { return }; redoStack.append(backup); apply(prior) }

@@ -774,3 +774,44 @@
 "启动时恢复上次页面" = "Restore last page on launch";
 
 "恢复上次打开的模块、清单、任务详情和侧栏布局。关闭后使用固定启动页。" = "Restore the last module, list, task details and sidebar layout. Turn off to use a fixed start page.";
+
+"已放弃" = "Abandoned";
+
+"恢复为待办" = "Restore to To-do";
+
+"放弃" = "Abandon";
+
+"关联主任务" = "Attach to Parent Task";
+
+"一周后" = "In a week";
+
+"选择日期…" = "Choose Date…";
+
+"已置顶" = "Pinned";
+
+"在新窗口打开" = "Open in New Window";
+
+"新建标签…" = "New Tag…";
+
+"新建标签" = "New Tag";
+
+"查看当前专注" = "View Current Focus";
+
+"转换为任务" = "Convert to Task";
+
+"转换为笔记" = "Convert to Note";
+
+"搜索主任务" = "Search parent tasks";
+"移动象限" = "Move to quadrant";
+
+"没有可关联的主任务" = "No eligible parent tasks";
+
+"笔记" = "Note";
+
+"请先结束当前专注，再开始其他任务。" = "Finish your current focus session before starting another task.";
+
+"启动" = "Launch";
+
+"恢复上次打开的模块、清单和任务详情。关闭后使用固定启动页。" = "Restore the last module, list and task details. Turn off to use a fixed start page.";
+
+"便签" = "Quick Note";

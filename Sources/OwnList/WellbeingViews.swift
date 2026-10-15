@@ -29,7 +29,7 @@ struct FocusView: View {
                 }.padding(.horizontal,20).frame(height: 52)
                 Picker("计时方式",selection: Binding(get: { timer.mode },set: { timer.changeMode($0) })) { Text("番茄计时").tag("番茄"); Text("正计时").tag("正计时") }.pickerStyle(.segmented).labelsHidden().frame(width: 210).disabled(timer.running || timer.elapsed > 0).padding(.top,12)
                 Spacer(minLength: 20)
-                Picker("关联任务",selection: $timer.taskID) { Text("自由专注").tag(nil as UUID?); ForEach(store.tasks.filter { !$0.deleted && (!$0.completed && $0.archived != true || $0.id == timer.taskID) && !$0.isTemplate }) { Text($0.title).tag(Optional($0.id)) } }.labelsHidden().frame(maxWidth: 260).disabled(timer.running || timer.elapsed > 0).padding(.bottom,30)
+                Picker("关联任务",selection: $timer.taskID) { Text("自由专注").tag(nil as UUID?); ForEach(store.tasks.filter { !$0.deleted && ($0.isPendingTask || $0.id == timer.taskID) }) { Text($0.title).tag(Optional($0.id)) } }.labelsHidden().frame(maxWidth: 260).disabled(timer.running || timer.elapsed > 0).padding(.bottom,30)
                 ZStack {
                     Circle().stroke(ListTheme.separator,lineWidth: 4)
                     if timer.elapsed > 0 { Circle().trim(from: 0,to: timer.mode == "番茄" ? min(1,timer.elapsed / timer.phaseLength) : 1).stroke(ListTheme.accent,style: StrokeStyle(lineWidth: 4,lineCap: .round)).rotationEffect(.degrees(-90)) }

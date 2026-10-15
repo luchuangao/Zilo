@@ -28,14 +28,19 @@ enum Capability {
     @Published var activity: [ActivityEntry] = []
     @Published var syncStatus = "已保存在本机"
     @Published var error: String?
-    @Published var selectedTask: TaskItem?
-    @Published var selectedModule = "tasks"
+    @Published var selectedTask: TaskItem? { didSet { if !restoringWorkspace { visibleTaskID = selectedTask?.id; persistWorkspace() } } }
+    @Published var selectedModule = "tasks" { didSet { persistWorkspace() } }
+    @Published var taskSelection = "today" { didSet { persistWorkspace() } }
+    @Published var taskListID: UUID? { didSet { persistWorkspace() } }
+    @Published var morePath: [String] = [] { didSet { persistWorkspace() } }
+    @Published var showCompleted = false { didSet { persistWorkspace() } }
+    @Published var visibleTaskID: UUID? { didSet { persistWorkspace() } }
+    private var restoringWorkspace = true
     init(persistence supplied: Persistence? = nil) {
         UserDefaults.standard.register(defaults: ["cloudEnabled":true,"accent":"blue","recognizeDate":true])
         persistence = supplied ?? Persistence(cloud: Capability.cloudAvailable && UserDefaults.standard.bool(forKey: "cloudEnabled"))
         #if DEBUG
         _ = ZiloScreenshotData.seed(persistence)
-        if ProcessInfo.processInfo.environment["ZILO_SCREENSHOTS"] == "1", let scene = ProcessInfo.processInfo.environment["ZILO_SCREENSHOT_SCENE"], ["tasks","focus"].contains(scene) { selectedModule = scene }
         #endif
         persistence.onChange = { [weak self] in Task { @MainActor in self?.reload() } }
         persistence.onCloudEvent = { [weak self] message in Task { @MainActor in self?.syncStatus = message; if message.hasPrefix("已同步") || message.hasPrefix("同步失败") { self?.log(message.hasPrefix("已同步") ? "iCloud 同步" : "同步失败",message) } } }
@@ -43,8 +48,26 @@ enum Capability {
         reload()
         if let data = try? Data(contentsOf: persistence.root.appendingPathComponent("Activity.json")),let entries = try? JSONDecoder().decode([ActivityEntry].self,from: data) { activity = entries }
         error = persistence.loadError
+        let workspace = MobileWorkspaceState.launch().validated(tasks: tasks,lists: lists,filters: filters,visibility: ModulePreferences(rawValue: UserDefaults.standard.string(forKey: "moduleVisibility") ?? ""))
+        selectedModule = workspace.module; taskSelection = workspace.selection; taskListID = workspace.listID
+        morePath = workspace.morePath; showCompleted = workspace.showCompleted; visibleTaskID = workspace.taskID
+        selectedTask = tasks.first { $0.id == workspace.taskID }
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["ZILO_SCREENSHOTS"] == "1", let scene = ProcessInfo.processInfo.environment["ZILO_SCREENSHOT_SCENE"], ["tasks","focus"].contains(scene) { selectedModule = scene; selectedTask = nil; visibleTaskID = nil }
+        #endif
+        restoringWorkspace = false
+        persistWorkspace()
     }
-    var active: [TaskItem] { tasks.filter { !$0.deleted && !$0.completed && !$0.isTemplate && $0.archived != true }.sorted { $0.order < $1.order } }
+    func persistWorkspace() {
+        guard !restoringWorkspace else { return }
+        MobileWorkspaceState(module: selectedModule,selection: taskSelection,listID: taskListID,taskID: visibleTaskID,morePath: morePath,showCompleted: showCompleted).save()
+    }
+    func openTask(_ id: UUID) {
+        guard let task = tasks.first(where: { $0.id == id && !$0.deleted }) else { return }
+        selectedModule = "tasks"; taskListID = task.abandoned == true ? nil : task.listID; taskSelection = task.abandoned == true ? "abandoned" : task.listID == nil ? "inbox" : "list"
+        selectedTask = task
+    }
+    var active: [TaskItem] { tasks.filter(\.isPendingTask).sorted { if ($0.pinned == true) != ($1.pinned == true) { return $0.pinned == true }; return $0.order < $1.order } }
     func reload() {
         do {
             tasks = try persistence.load(TaskItem.self); lists = try persistence.load(TaskList.self).sorted { $0.order < $1.order }
@@ -88,7 +111,7 @@ enum Capability {
         guard save(item) else { return nil }; log("创建任务",item.title,owner: item.id); return item
     }
     func complete(_ id: UUID) {
-        guard var item = tasks.first(where: { $0.id == id }) else { return }
+        guard var item = tasks.first(where: { $0.id == id && !$0.deleted && $0.isNote != true && $0.abandoned != true }) else { return }
         let originals = tasks
         let persistence = self.persistence
         item.completed.toggle(); item.completedAt = item.completed ? Date() : nil
@@ -97,7 +120,7 @@ enum Capability {
             try persistence.transaction {
                 try persistence.save(item)
                 func children(_ parent: UUID,_ visited: Set<UUID>) throws {
-                    for var child in originals.filter({ !$0.deleted && $0.parentID == parent && !visited.contains($0.id) }) {
+                    for var child in originals.filter({ !$0.deleted && $0.isNote != true && $0.abandoned != true && $0.parentID == parent && !visited.contains($0.id) }) {
                         child.completed = item.completed; child.completedAt = item.completedAt
                         child.checks = child.checks.map { var c = $0; c.done = item.completed; return c }
                         try persistence.save(child); try children(child.id,visited.union([child.id]))

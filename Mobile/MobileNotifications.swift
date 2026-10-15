@@ -110,6 +110,12 @@ final class MobileNotifications: NSObject,UNUserNotificationCenterDelegate {
     var length: Double { Double((phase == "休息" ? (rounds % 4 == 0 ? longBreak : shortBreak) : minutes) * 60) }
     var display: String { let seconds = Int(mode == "番茄" ? max(0,length - elapsed) : elapsed); return String(format: "%02d:%02d",seconds / 60,seconds % 60) }
     func selectMode(_ value: String) { guard !running && elapsed == 0 else { return }; mode = value; phase = "专注"; persist() }
+    @discardableResult func startTask(_ id: UUID,mode requested: String) -> Bool {
+        guard ["番茄","正计时"].contains(requested) else { return false }
+        if running || elapsed > 0 { guard taskID == id,mode == requested,phase == "专注" else { return false } }
+        else { selectMode(requested); taskID = id }
+        start(); return true
+    }
     func start() {
         guard !running else { return }; if started == nil { started = now() }; resumed = now(); running = true; persist()
         if mode == "番茄" { MobileNotifications.shared.focusDeadline(now().addingTimeInterval(length - elapsed),phase: phase) }
