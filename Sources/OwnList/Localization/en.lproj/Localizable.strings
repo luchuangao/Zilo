@@ -803,6 +803,10 @@
 
 "搜索主任务" = "Search parent tasks";
 "移动象限" = "Move to quadrant";
+"移动到" = "Move to";
+"清除日期" = "Clear date";
+"标签名称" = "Tag name";
+"放弃任务" = "Abandon task";
 
 "没有可关联的主任务" = "No eligible parent tasks";
 
