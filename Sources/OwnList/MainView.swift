@@ -106,6 +106,7 @@ struct MainView: View {
                     }.buttonStyle(.plain).quietHover(selected: module == item,rail: true)
                         .help(ZiloLanguage.text(item.rawValue)).accessibilityLabel(ZiloLanguage.text(item.rawValue))
                 }
+                Button { SideNotesPanel.shared.show(store) } label: { Image(systemName: "note.text").font(.system(size: 20)).frame(width: 38,height: 38).foregroundStyle(ListTheme.railForeground) }.buttonStyle(.plain).quietHover(rail: true).help("便签").accessibilityLabel("便签")
                 Spacer()
                 Button { syncPanelVisible.toggle() } label: { Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 21)).frame(width: 38,height: 38) }.buttonStyle(.plain).quietHover(selected: syncPanelVisible,rail: true).help("同步").accessibilityLabel("同步").popover(isPresented: $syncPanelVisible,arrowEdge: .trailing) { SyncStatusPanel().environmentObject(store) }
                 Button { notificationPanelVisible.toggle() } label: { Image(systemName: "bell").font(.system(size: 21)).frame(width: 38,height: 38) }.buttonStyle(.plain).quietHover(selected: notificationPanelVisible,rail: true).help("通知与活动").accessibilityLabel("通知与活动").popover(isPresented: $notificationPanelVisible,arrowEdge: .trailing) { NotificationInbox(onOpenTask: openNotificationTask,onOpenModule: { target in module = target; notificationPanelVisible = false }).environmentObject(store) }
@@ -246,7 +247,7 @@ struct MainView: View {
                 }.padding(.horizontal,10).frame(height: 34).contentShape(Rectangle())
             }.menuStyle(.borderlessButton).menuIndicator(.hidden).foregroundStyle(ListTheme.text).quietHover()
             optionRow("搜索任务","magnifyingglass") { listOptionsVisible = false; searchVisible = true }
-            optionRow("桌面便签","note.text") { listOptionsVisible = false; DesktopBridge.panel(title: title,view: StickyView(listID: selectedListID).environmentObject(store)) }
+            optionRow("桌面便签","note.text") { listOptionsVisible = false; SideNotesPanel.shared.show(store) }
             optionRow("打印","printer") { listOptionsVisible = false; printList() }
             if let id = selectedListID {
                 Divider().padding(.vertical,4)

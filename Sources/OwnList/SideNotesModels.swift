@@ -1,0 +1,95 @@
+import Foundation
+
+struct SideNoteFolder: ListRecord, Hashable {
+    static let kind = "sideNoteFolder"
+    var id = UUID(); var deleted = false; var name = ""; var order = Date().timeIntervalSince1970
+}
+struct SideNote: ListRecord, Hashable {
+    static let kind = "sideNote"
+    var id = UUID(); var deleted = false; var title = ""; var text = ""
+    var richText: Data?; var documentMode: DocumentEditingMode = .markdown
+    var folderID: UUID?; var taskID: UUID?
+    var color = "none"; var pinned = false; var folded = false
+    var created = Date(); var modified = Date(); var order = Date().timeIntervalSince1970
+    var attachments: [Attachment] = []
+    func document(tasks: [TaskItem]) -> TaskItem? {
+        if let taskID { return tasks.first { $0.id == taskID && !$0.deleted } }
+        var task = TaskItem(); task.id = id; task.title = title; task.notes = text
+        task.richText = richText; task.documentMode = documentMode; task.attachments = attachments
+        task.isNote = true; task.created = created; return task
+    }
+}
+enum SideNotesLibrary {
+    static let colors = ["none","yellow","blue","green","purple","pink"]
+    static func visible(_ notes: [SideNote],tasks: [TaskItem],folderID: UUID? = nil,search: String = "",trash: Bool = false) -> [SideNote] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return notes.filter { note in
+            guard note.deleted == trash,folderID == nil || note.folderID == folderID else { return false }
+            let document = note.document(tasks: tasks)
+            return query.isEmpty || ((document?.title ?? note.title) + "\n" + (document?.notes ?? note.text)).localizedCaseInsensitiveContains(query)
+        }.sorted {
+            if $0.pinned != $1.pinned { return $0.pinned }
+            return $0.order == $1.order ? $0.created < $1.created : $0.order > $1.order
+        }
+    }
+}
+
+@MainActor protocol SideNotesStore: AnyObject {
+    var sideNotes: [SideNote] { get }
+    var noteFolders: [SideNoteFolder] { get }
+    var tasks: [TaskItem] { get }
+    var persistence: Persistence { get }
+    var error: String? { get set }
+    @discardableResult func persistSideNote(_ note: SideNote) -> Bool
+    @discardableResult func persistSideNoteFolder(_ folder: SideNoteFolder) -> Bool
+    @discardableResult func persistNoteTask(_ task: TaskItem) -> Bool
+    func reload()
+}
+@MainActor extension SideNotesStore {
+    @discardableResult func createSideNote(folderID: UUID? = nil,text: String = "") -> UUID? {
+        var note = SideNote(); note.folderID = validNoteFolder(folderID); note.text = text
+        return persistSideNote(note) ? note.id : nil
+    }
+    @discardableResult func linkSideNote(taskID: UUID) -> UUID? {
+        guard let task = tasks.first(where: { $0.id == taskID && !$0.deleted }) else { return nil }
+        if let existing = sideNotes.first(where: { $0.taskID == taskID && !$0.deleted }) { return existing.id }
+        var note = SideNote(); note.taskID = taskID; note.title = task.title
+        return persistSideNote(note) ? note.id : nil
+    }
+    func updateSideNote(_ id: UUID,_ body: (inout SideNote) -> Void) {
+        guard var note = sideNotes.first(where: { $0.id == id }) else { return }
+        let before = note; body(&note); guard before != note else { return }
+        note.modified = Date(); _ = persistSideNote(note)
+    }
+    func updateSideNoteDocument(_ id: UUID,title: String? = nil,text: String? = nil,richText: Data? = nil,mode: DocumentEditingMode? = nil) {
+        guard var note = sideNotes.first(where: { $0.id == id && !$0.deleted }),var document = note.document(tasks: tasks) else { return }
+        if let title { document.title = title }
+        if let text { document.notes = text }
+        if let mode { document.documentMode = mode }
+        if richText != nil { document.richText = richText }
+        if note.taskID != nil { _ = persistNoteTask(document) }
+        else {
+            note.title = document.title; note.text = document.notes; note.richText = document.richText
+            note.documentMode = document.editingMode; note.modified = Date(); _ = persistSideNote(note)
+        }
+    }
+    @discardableResult func createNoteFolder(_ name: String) -> UUID? {
+        let value = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return nil }
+        if let existing = noteFolders.first(where: { !$0.deleted && $0.name.localizedCaseInsensitiveCompare(value) == .orderedSame }) { return existing.id }
+        var folder = SideNoteFolder(); folder.name = value
+        return persistSideNoteFolder(folder) ? folder.id : nil
+    }
+    @discardableResult func deleteNoteFolder(_ id: UUID) -> Bool {
+        guard var folder = noteFolders.first(where: { $0.id == id && !$0.deleted }) else { return false }
+        folder.deleted = true
+        do {
+            try persistence.transaction {
+                try persistence.save(folder)
+                for var note in sideNotes where note.folderID == id { note.folderID = nil; try persistence.save(note) }
+            }
+            reload(); return true
+        } catch { self.error = error.localizedDescription; return false }
+    }
+    func validNoteFolder(_ id: UUID?) -> UUID? { noteFolders.contains { $0.id == id && !$0.deleted } ? id : nil }
+}

@@ -118,4 +118,34 @@ extension MobileStoreTests {
         let next = try XCTUnwrap(store.tasks.first { $0.id != task.id && $0.parentID == nil })
         XCTAssertEqual(next.checks.first?.due,next.due?.addingTimeInterval(-3600)); XCTAssertEqual(next.checks.first?.reminders,[0,600]); XCTAssertEqual(next.checks.first?.done,false)
     }
+    @MainActor func testSideNotesKeepTaskLinkLiveAndFoldersRecoverable() throws {
+        let store = MobileStore(persistence: Persistence(inMemory: true))
+        let folder = try XCTUnwrap(store.createNoteFolder("灵感"))
+        let standalone = try XCTUnwrap(store.createSideNote(folderID: folder,text: "随手记"))
+        XCTAssertTrue(store.tasks.isEmpty)
+        var task = TaskItem(); task.title = "原任务"; task.notes = "原正文"; task.documentMode = .markdown
+        XCTAssertTrue(store.save(task))
+        let linked = try XCTUnwrap(store.linkSideNote(taskID: task.id))
+        XCTAssertEqual(store.linkSideNote(taskID: task.id),linked)
+        store.updateSideNoteDocument(linked,text: "便签修改")
+        XCTAssertEqual(store.tasks.first?.notes,"便签修改")
+        store.updateSideNote(linked) { $0.deleted = true }
+        XCTAssertFalse(try XCTUnwrap(store.tasks.first).deleted)
+        XCTAssertTrue(store.deleteNoteFolder(folder))
+        XCTAssertNil(store.sideNotes.first { $0.id == standalone }?.folderID)
+        store.reload(); XCTAssertEqual(store.sideNotes.count,2)
+        XCTAssertEqual(SideNotesLibrary.visible(store.sideNotes,tasks: store.tasks,trash: true).map(\.id),[linked])
+    }
+    @MainActor func testMobileHTMLExportsMarkdownAndRichTextWithoutAppOnlyLinks() throws {
+        var task = TaskItem(); task.title = "HTML <标题>"; task.documentMode = .markdown
+        task.notes = "## 标题\n\n```swift\nprint(1)\n```\n\n- [x] 完成"
+        let html = String(decoding: try HTMLDocument.data(task: task),as: UTF8.self)
+        XCTAssertTrue(html.contains("&lt;标题&gt;")); XCTAssertTrue(html.contains("hljs-number")); XCTAssertFalse(html.contains("zilo-copy:"))
+        let rich = NSAttributedString(string: "粗体与链接",attributes: [.font:UIFont.boldSystemFont(ofSize:18),.link:URL(string:"https://example.com")!])
+        task.documentMode = .richText
+        task.richText = try rich.data(from:NSRange(location:0,length:rich.length),documentAttributes:[.documentType:NSAttributedString.DocumentType.rtf])
+        let exported = String(decoding: try HTMLDocument.data(task:task),as:UTF8.self)
+        XCTAssertTrue(exported.contains("<strong>")); XCTAssertTrue(exported.contains("href=\"https://example.com\"")); XCTAssertTrue(exported.contains("粗体与链接"))
+    }
+
 }

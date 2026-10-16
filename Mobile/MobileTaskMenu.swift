@@ -121,7 +121,7 @@ struct MobileTaskMenu: ViewModifier {
                     }
                     Button("创建副本",systemImage: "doc.on.doc") { _ = store.duplicateTask(taskID) }
                     Button("复制链接",systemImage: "link") { UIPasteboard.general.url = URL(string: "ownlist://task?id=\(taskID.uuidString)") }
-                    Button("打开便签",systemImage: "note.text") { editor = .note }
+                    Button("打开便签",systemImage: "note.text") { _ = store.linkSideNote(taskID: taskID); editor = .note }
                     Button(task.isNote == true ? "转换为任务" : "转换为笔记",systemImage: "doc.text") { store.setTaskNote(taskID,to: task.isNote != true) }
                     Button("修改名称",systemImage: "pencil") { editor = .rename }
                     Button("打开详情",systemImage: "doc.text.magnifyingglass") { store.openTask(taskID) }
@@ -129,7 +129,7 @@ struct MobileTaskMenu: ViewModifier {
                     Button("删除",systemImage: "trash",role: .destructive) { store.trash(taskID) }
                 }
             }
-        }.sheet(item: $editor) { action in NavigationStack { MobileTaskMenuForm(taskID: taskID,action: action) }.presentationDetents(action == .note || action == .parent ? [.large] : [.medium,.large]) }
+        }.sheet(item: $editor) { action in NavigationStack { if action == .note,let note = store.sideNotes.first(where: { $0.taskID == taskID && !$0.deleted }) { MobileSideNoteEditor(noteID: note.id) } else { MobileTaskMenuForm(taskID: taskID,action: action) } }.presentationDetents(action == .note || action == .parent ? [.large] : [.medium,.large]) }
     }
     func setDate(_ offset: Int) {
         guard var task else { return }

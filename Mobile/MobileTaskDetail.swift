@@ -10,6 +10,8 @@ struct MobileTaskDetail: View {
     let id: UUID
     @State private var addChild = false; @State private var attach = false; @State private var preview = false; @State private var file: URL?
     @State private var move = false
+    @State private var sideNote: UUID?
+    @State private var exportedHTML: MobileHTMLFile?
     @State private var reminderCheck: UUID?
     @State private var previewHeight: CGFloat = 180
     @FocusState private var notesFocused: Bool
@@ -69,14 +71,21 @@ struct MobileTaskDetail: View {
                 ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) { Menu {
                     Button("添加附件",systemImage: "paperclip") { attach = true }
+                    Button("打开便签",systemImage: "note.text") { sideNote = store.linkSideNote(taskID: id) }
                     NavigationLink("日期与任务属性") { MobileTaskOptions(id: id) }
                     NavigationLink("修改历史") { MobileTaskHistory(id: id) }
                     Button("移动位置",systemImage: "arrow.up.arrow.down") { move = true }
+                    Button("HTML 网页（.html）",systemImage: "square.and.arrow.up") {
+                        do { exportedHTML = MobileHTMLFile(url: try HTMLDocument.temporaryFile(task: task,children: store.tasks.filter { !$0.deleted && $0.parentID == id },baseURL: store.persistence.root)) }
+                        catch { store.error = error.localizedDescription }
+                    }
                     if task.deleted { Button("恢复任务") { store.restore(id); dismiss() } }
                     else { Button("移到回收站",systemImage: "trash",role: .destructive) { store.trash(id); dismiss() } }
                 } label: { Image(systemName: "ellipsis") } }
             }.sheet(isPresented: $addChild) { MobileAddTask(listID: task.listID,parentID: id) }
                 .sheet(isPresented: $move) { NavigationStack { MobileMoveTask(id: id) } }
+                .sheet(isPresented: Binding(get: { sideNote != nil },set: { if !$0 { sideNote = nil } })) { if let sideNote { NavigationStack { MobileSideNoteEditor(noteID: sideNote) } } }
+                .sheet(item: $exportedHTML) { MobileShare(items: [$0.url]) }
                 .fileImporter(isPresented: $attach,allowedContentTypes: [.item],allowsMultipleSelection: true) { result in switch result { case .success(let urls): store.attach(urls,taskID: id); case .failure(let error): store.error = error.localizedDescription } }
                 .sheet(isPresented: Binding(get: { reminderCheck != nil },set: { if !$0 { reminderCheck = nil } })) {
                     if let checkID = reminderCheck { NavigationStack { MobileCheckReminder(taskID: id,checkID: checkID) } }
@@ -89,6 +98,7 @@ struct MobileTaskDetail: View {
             .onAppear { store.visibleTaskID = id }
     }
 }
+struct MobileHTMLFile: Identifiable { let id = UUID(); var url: URL }
 struct MobileTaskOptions: View {
     @Environment(\.mobileAccent) private var appAccent
     @EnvironmentObject var store: MobileStore

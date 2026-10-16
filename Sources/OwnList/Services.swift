@@ -186,13 +186,18 @@ enum WidgetSnapshot {
 }
 
 @MainActor enum DesktopBridge {
+    static var notesAction: (() -> Void)?; static var notesHotKey: EventHotKeyRef?
     static var windows: [NSWindow] = []; static var quickAction: (() -> Void)?; static var hotKey: EventHotKeyRef?; static var installedHandler = false; static var hotKeyError: OSStatus = noErr
     static func updateBadge(_ count: Int) { NSApp?.dockTile.badgeLabel = count == 0 ? nil : String(count) }
     static func panel<V: View>(title: String, view: V, floating: Bool = true, size: NSSize = NSSize(width: 420,height: 450)) { let window = NSPanel(contentRect: NSRect(origin: .zero,size: size),styleMask: [.titled,.closable,.resizable,.nonactivatingPanel],backing: .buffered,defer: false); window.title = title; window.contentView = NSHostingView(rootView: view); window.level = floating ? .floating : .normal; window.isReleasedWhenClosed = false; window.center(); window.makeKeyAndOrderFront(nil); windows.append(window) }
     static func registerHotkey() {
-        if let hotKey { UnregisterEventHotKey(hotKey); self.hotKey = nil }; guard UserDefaults.standard.object(forKey: "quickEnabled") as? Bool != false else { return }
+        if let hotKey { UnregisterEventHotKey(hotKey); self.hotKey = nil }; if let notesHotKey { UnregisterEventHotKey(notesHotKey); self.notesHotKey = nil }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),eventKind: UInt32(kEventHotKeyPressed))
-        if !installedHandler { InstallEventHandler(GetApplicationEventTarget(), { _,_,_ in DispatchQueue.main.async { DesktopBridge.quickAction?() }; return noErr },1,&spec,nil,nil); installedHandler = true }
+        if !installedHandler { InstallEventHandler(GetApplicationEventTarget(), { _,event,_ in
+            var id = EventHotKeyID(); guard GetEventParameter(event,EventParamName(kEventParamDirectObject),EventParamType(typeEventHotKeyID),nil,MemoryLayout<EventHotKeyID>.size,nil,&id) == noErr,id.signature == 0x4f574e4c else { return OSStatus(eventNotHandledErr) }
+            let command = id.id; DispatchQueue.main.async { if command == 2 { DesktopBridge.notesAction?() } else if command == 1 { DesktopBridge.quickAction?() } }; return noErr },1,&spec,nil,nil); installedHandler = true }
+        RegisterEventHotKey(UInt32(kVK_ANSI_N),UInt32(cmdKey | optionKey),EventHotKeyID(signature: 0x4f574e4c,id: 2),GetApplicationEventTarget(),0,&notesHotKey)
+        guard UserDefaults.standard.object(forKey: "quickEnabled") as? Bool != false else { return }
         let key = UInt32(UserDefaults.standard.object(forKey: "quickCode") as? Int ?? (UserDefaults.standard.integer(forKey: "quickKey") == 1 ? kVK_ANSI_Q : kVK_ANSI_A)); let modifiers = UInt32(UserDefaults.standard.object(forKey: "quickModifiers") as? Int ?? (cmdKey | optionKey))
         hotKeyError = RegisterEventHotKey(key, modifiers,EventHotKeyID(signature: 0x4f574e4c,id: 1),GetApplicationEventTarget(),0,&hotKey)
     }

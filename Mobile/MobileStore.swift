@@ -18,6 +18,8 @@ enum Capability {
 @MainActor final class MobileStore: ObservableObject {
     let persistence: Persistence
     private var remindersWork: Task<Void,Never>?
+    @Published var sideNotes: [SideNote] = []
+    @Published var noteFolders: [SideNoteFolder] = []
     @Published var tasks: [TaskItem] = []
     @Published var lists: [TaskList] = []
     @Published var habits: [Habit] = []
@@ -72,6 +74,7 @@ enum Capability {
         do {
             tasks = try persistence.load(TaskItem.self); lists = try persistence.load(TaskList.self).sorted { $0.order < $1.order }
             habits = try persistence.load(Habit.self); focus = try persistence.load(FocusRecord.self)
+            sideNotes = try persistence.load(SideNote.self); noteFolders = try persistence.load(SideNoteFolder.self)
             countdowns = try persistence.load(Countdown.self); subscriptions = try persistence.load(CalendarSubscription.self); filters = try persistence.load(SavedFilter.self)
             try persistence.restoreBlobs()
             scheduleReminders()
@@ -91,6 +94,8 @@ enum Capability {
             try persistence.save(value)
             func upsert<R: ListRecord>(_ item: R,_ array: inout [R]) { if let index = array.firstIndex(where: { $0.id == item.id }) { array[index] = item } else { array.append(item) } }
             if let item = value as? TaskItem { upsert(item,&tasks); scheduleReminders() }
+            else if let item = value as? SideNote { upsert(item,&sideNotes) }
+            else if let item = value as? SideNoteFolder { upsert(item,&noteFolders) }
             else if let item = value as? TaskList { upsert(item,&lists); lists.sort { $0.order < $1.order } }
             else if let item = value as? Habit { upsert(item,&habits); scheduleReminders() }
             else if let item = value as? FocusRecord { upsert(item,&focus) }
@@ -215,8 +220,8 @@ enum Capability {
     }
     func exportBackup() throws -> URL {
         var blobs: [String: Data] = [:]
-        for attachment in tasks.flatMap(\.attachments) { if let data = try? Data(contentsOf: persistence.root.appendingPathComponent(attachment.relativePath)) { blobs[attachment.relativePath] = data } }
-        let data = Backup(tasks: tasks,lists: lists,filters: filters,habits: habits,focus: focus,subscriptions: subscriptions,attachmentFiles: blobs,countdowns: countdowns)
+        for attachment in tasks.flatMap(\.attachments) + sideNotes.flatMap(\.attachments) { if let data = try? Data(contentsOf: persistence.root.appendingPathComponent(attachment.relativePath)) { blobs[attachment.relativePath] = data } }
+        let data = Backup(tasks: tasks,lists: lists,filters: filters,habits: habits,focus: focus,subscriptions: subscriptions,attachmentFiles: blobs,countdowns: countdowns,sideNotes: sideNotes,noteFolders: noteFolders)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("Zilo-" + Day.key(Date()) + ".ownlist.json")
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted,.sortedKeys]; try encoder.encode(data).write(to: url,options: .atomic); return url
     }
@@ -233,6 +238,7 @@ enum Capability {
             for record in backup.tasks { try persistence.save(record) }; for record in backup.lists { try persistence.save(record) }
             for record in backup.filters { try persistence.save(record) }; for record in backup.habits { try persistence.save(record) }
             for record in backup.focus { try persistence.save(record) }; for record in backup.countdowns ?? [] { try persistence.save(record) }
+            for record in backup.sideNotes ?? [] { try persistence.save(record) }; for record in backup.noteFolders ?? [] { try persistence.save(record) }
             for record in backup.subscriptions { try persistence.save(record) }
         }; reload(); log("导入备份","记录已合并")
     }

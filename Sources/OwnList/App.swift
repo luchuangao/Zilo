@@ -23,7 +23,7 @@ import AppKit
                     }
                     focus.onRecord = { store.save($0) }; focus.rescheduleNotification()
                     DesktopBridge.quickAction = { DesktopBridge.panel(title: "快速添加",view: QuickAddPanel().environmentObject(store).themeAppearance(),size: NSSize(width: 480,height: 170)) }
-                    DesktopBridge.registerHotkey(); delegate.store = store
+                    SideNotesPanel.shared.configure(store); DesktopBridge.registerHotkey(); delegate.store = store
                 }
                 .onOpenURL { url in
                     guard url.scheme == "ownlist" else { return }; let parts = URLComponents(url: url,resolvingAgainstBaseURL: false); let params = Dictionary((parts?.queryItems ?? []).map { ($0.name,$0.value ?? "") },uniquingKeysWith: { _,new in new })
@@ -32,7 +32,7 @@ import AppKit
                 }
         }.windowStyle(.hiddenTitleBar).defaultSize(width: 1350,height: 850).commands {
             CommandGroup(replacing: .undoRedo) { Button("撤销") { undoDocumentOrTask() }.keyboardShortcut("z"); Button("重做") { undoDocumentOrTask(redo: true) }.keyboardShortcut("z",modifiers: [.command,.shift]) }
-            CommandGroup(after: .newItem) { Button("快速添加任务") { DesktopBridge.quickAction?() }.keyboardShortcut("n"); Button("桌面便签") { DesktopBridge.panel(title: "今日便签",view: StickyView().environmentObject(store),size: NSSize(width: 340,height: 480)) } }
+            CommandGroup(after: .newItem) { Button("快速添加任务") { DesktopBridge.quickAction?() }.keyboardShortcut("n"); Button("桌面便签") { SideNotesPanel.shared.toggle() }.keyboardShortcut("n",modifiers: [.command,.option]) }
         }
         WindowGroup("任务详情", id: "task-detail", for: UUID.self) { taskID in
             TaskWindow(taskID: taskID)
@@ -45,6 +45,8 @@ import AppKit
     private func undoDocumentOrTask(redo: Bool = false) {
         if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, let coordinator = editor.delegate as? DetailDocumentEditor.Coordinator {
             coordinator.performUndo(in: editor,redo: redo)
+        } else if let editor = NSApp.keyWindow?.firstResponder as? NSTextView,editor.isEditable,let undo = editor.undoManager {
+            if redo { undo.redo() } else { undo.undo() }
         } else if redo { store.redo() } else { store.undo() }
     }
 
@@ -168,7 +170,7 @@ struct MenuPanel: View {
                     HStack(spacing: 5) { Text("打开"); Image(systemName: "arrow.up.right").font(.system(size: 10,weight: .medium)) }
                         .font(.system(size: 12)).padding(.horizontal,9).frame(height: 28).contentShape(Rectangle())
                 }.buttonStyle(.plain).foregroundStyle(ListTheme.secondary).quietHover().accessibilityLabel("打开")
-                Menu { Button("退出 Zilo",role: .destructive) { NSApp.terminate(nil) } } label: {
+                Menu { Button("打开便签",systemImage: "note.text") { SideNotesPanel.shared.show(store) }; Button("退出 Zilo",role: .destructive) { NSApp.terminate(nil) } } label: {
                     Image(systemName: "ellipsis").font(.system(size: 14)).frame(width: 24,height: 28).contentShape(Rectangle())
                 }.menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().foregroundStyle(ListTheme.secondary).quietHover().accessibilityLabel("Zilo 菜单")
             }

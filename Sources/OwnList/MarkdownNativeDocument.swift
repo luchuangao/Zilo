@@ -201,9 +201,21 @@ enum MarkdownNativeDocument {
         while location < source.length {
             let range = source.paragraphRange(for:NSRange(location:location,length:0)); let a = content.attributes(at:location,effectiveRange:nil); let meta = DocumentStyle.metadata(a)
             let paragraph = content.attributedSubstring(from:range); let code = meta["kind"] == "code" || MarkdownTyping.isCodeBlock(a)
+            // A table must end before an early-returning code or mindmap block.
+            // Otherwise its final cell absorbs the following fence on export.
+            if meta["kind"] != "table",lastTable != nil {
+                result += " |\n"; if tableRow == "0" { result += "|"+String(repeating:" --- |",count:columns)+"\n" }
+                result += "\n"; lastTable = nil; tableRow = nil
+            }
             if meta["kind"] == "mindmap",let map = meta["source"] {
                 if codeID != nil { result += fence+"\n"; codeID = nil }
-                result += "\n```mermaid\n"+map+"\n```\n\n"; location = NSMaxRange(range); continue
+                result += "\n```mermaid\n"+map+"\n```\n\n"
+                // Images or text can follow a mindmap in the same paragraph.
+                if paragraph.length > 1 {
+                    let remaining = inline(paragraph.attributedSubstring(from: NSRange(location: 1,length: paragraph.length - 1)))
+                    if !remaining.isEmpty { result += remaining + "\n\n" }
+                }
+                location = NSMaxRange(range); continue
             }
             if meta["kind"] == "codeLabel",paragraph.string.trimmingCharacters(in:.newlines) == meta["label"] { location = NSMaxRange(range); continue }
             if code {

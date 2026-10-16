@@ -398,12 +398,13 @@ struct TaskDetailView: View {
         Button("保存为模板",systemImage: "doc.badge.plus") { store.duplicate(task.id,asTemplate: true) }
         Button("创建副本",systemImage: "doc.on.doc") { store.duplicate(task.id) }
         Button("复制链接",systemImage: "link") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString("ownlist://task?id=\(task.id)",forType: .string) }
-        Button("打开便签",systemImage: "note.text") { DesktopBridge.panel(title: task.title,view: TaskNoteView(taskID: task.id).environmentObject(store)) }
+        Button("打开便签",systemImage: "note.text") { SideNotesPanel.shared.show(store,taskID: task.id) }
         Button("插入或编辑思维导图",systemImage:"point.3.connected.trianglepath.dotted") { beginMindMap() }
         Menu("导出文档",systemImage: "square.and.arrow.up") {
             Button("Word 文档（.docx）") { exportDocument(task,format: .word) }
             Button("PDF 文档（.pdf）") { exportDocument(task,format: .pdf) }
             Button("Markdown 文件（.md）") { exportDocument(task,format: .markdown) }
+            Button("HTML 网页（.html）") { exportDocument(task,format: .html) }
         }
         Button("打印",systemImage: "printer") { printTask(task) }
         Divider()
@@ -777,6 +778,7 @@ struct ImportView: View {
             for list in preview.backup.lists { if let existing = store.lists.first(where: { !$0.deleted && $0.name == list.name && $0.folder == list.folder }) { mapping[list.id] = existing.id } else { store.save(list); mapping[list.id] = list.id } }
             var count = 0; var skipped = 0
             for var task in preview.backup.tasks { if store.tasks.contains(where: { $0.id == task.id || (task.sourceID != nil && $0.sourceID == task.sourceID) }) { skipped += 1; continue }; if let list = task.listID { task.listID = mapping[list] ?? list }; store.save(task); count += 1 }
+            for item in preview.backup.sideNotes ?? [] where !store.sideNotes.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.noteFolders ?? [] where !store.noteFolders.contains(where: { $0.id == item.id }) { store.save(item) }
             for item in preview.backup.countdowns ?? [] where !store.countdowns.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.filters where !store.filters.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.habits where !store.habits.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.focus where !store.focus.contains(where: { $0.id == item.id }) { store.save(item) }; for item in preview.backup.subscriptions where !store.subscriptions.contains(where: { $0.id == item.id }) { store.save(item) }
             result = "已导入 \(count) 条任务，跳过 \(skipped) 条重复；原数据已备份"
         } catch { store.error = error.localizedDescription }

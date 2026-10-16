@@ -107,7 +107,7 @@ private final class TaskActionItem: NSMenuItem {
             }
             action("创建副本","doc.on.doc") { _ = store.duplicate(id) }
             action("复制链接","link") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString("ownlist://task?id=\(id.uuidString)",forType: .string) }
-            action("打开便签","note.text") { DesktopBridge.panel(title: task.title,view: TaskNoteView(taskID: id).environmentObject(store).themeAppearance()) }
+            action("打开便签","note.text") { SideNotesPanel.shared.show(store,taskID: id) }
             action(task.isNote == true ? "转换为任务" : "转换为笔记","doc.text") { _ = store.setTaskNote(id,to: task.isNote != true) }
             submenu("更多","ellipsis",[
                 TaskActionItem("打开详情",symbol: "sidebar.right") { command(.details) },

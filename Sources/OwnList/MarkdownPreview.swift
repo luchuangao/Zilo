@@ -32,9 +32,9 @@ final class MarkdownRenderer {
         context.evaluateScript(Self.bridge)
     }
     var languages: [String] { lock.lock(); defer { lock.unlock() }; return context.evaluateScript("hljs.listLanguages()")?.toArray() as? [String] ?? [] }
-    func render(_ source: String) -> Result {
+    func render(_ source: String, forExport: Bool = false) -> Result {
         lock.lock(); defer { lock.unlock() }
-        guard let value = context.objectForKeyedSubscript("renderZilo")?.call(withArguments: [source]),
+        guard let value = context.objectForKeyedSubscript("renderZilo")?.call(withArguments: [source,forExport]),
               let result = value.toDictionary(), let html = result["html"] as? String else {
             return Result(html: "<p>" + Self.escape(source) + "</p>",codes: [])
         }
@@ -55,7 +55,7 @@ final class MarkdownRenderer {
         return file
     }
     private static let bridge = #"""
-    function renderZilo(source) {
+    function renderZilo(source, forExport) {
       // Notes preserve the author's Enter presses, including list descriptions.
       // A trailing Tab is whitespace, not a reason to collapse the following line.
       var md = markdownit({html:false,breaks:true,linkify:false,typographer:false});
@@ -102,6 +102,7 @@ final class MarkdownRenderer {
         var label = ({bash:'Bash',shell:'Shell',swift:'Swift',python:'Python',javascript:'JavaScript',typescript:'TypeScript',json:'JSON',yaml:'YAML',sql:'SQL',xml:'HTML / XML',html:'HTML',objectivec:'Objective-C',c:'C',kotlin:'Kotlin',ruby:'Ruby',php:'PHP',css:'CSS',cpp:'C++',csharp:'C#',go:'Go',rust:'Rust',java:'Java',nginx:'Nginx',text:ziloUI.plain,plaintext:ziloUI.plain})[language] || language;
         token.meta={language:language,label:label,highlight:highlighted ? highlighted.value : escape(token.content)};
         var id = codes.push(token.content) - 1;
+        if (forExport) return '<section class="code-card"><header><span>'+escape(label)+'</span></header><pre><code class="hljs">'+(highlighted ? highlighted.value : escape(token.content))+'</code></pre></section>';
         return '<section class="code-card"><header><a class="code-language" aria-label="选择代码语言" href="zilo-language:'+id+'">'+escape(label)+' <svg class="language-chevron" viewBox="0 0 10 14" aria-hidden="true"><path d="M2 5 5 2 8 5M2 9 5 12 8 9"/></svg></a><a aria-label="复制代码" href="zilo-copy:'+id+'">'+escape(ziloUI.copy)+'</a></header><pre><code class="hljs">'+(highlighted ? highlighted.value : escape(token.content))+'</code></pre></section>';
       };
       var image = md.renderer.rules.image;

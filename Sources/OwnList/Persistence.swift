@@ -129,11 +129,12 @@ final class Persistence {
         o.setValue(UUID(), forKey: "id"); o.setValue(version.owner, forKey: "owner"); o.setValue(version.kind, forKey: "kind"); o.setValue(version.field, forKey: "field"); o.setValue(version.json, forKey: "json"); o.setValue(Date(), forKey: "timestamp"); try container.viewContext.save(); fieldCache.removeValue(forKey: version.owner); cacheLoaded = false
     }
 }
-struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks: [TaskItem]; var lists: [TaskList]; var filters: [SavedFilter]; var habits: [Habit]; var focus: [FocusRecord]; var subscriptions: [CalendarSubscription]; var attachmentFiles: [String: Data]? = nil; var countdowns: [Countdown]? = nil }
+struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks: [TaskItem]; var lists: [TaskList]; var filters: [SavedFilter]; var habits: [Habit]; var focus: [FocusRecord]; var subscriptions: [CalendarSubscription]; var attachmentFiles: [String: Data]? = nil; var countdowns: [Countdown]? = nil; var sideNotes: [SideNote]? = nil; var noteFolders: [SideNoteFolder]? = nil }
 #if os(macOS)
 @MainActor final class Store: ObservableObject {
     let persistence: Persistence
     @Published var tasks: [TaskItem] = []; @Published var lists: [TaskList] = []; @Published var filters: [SavedFilter] = []; @Published var habits: [Habit] = []; @Published var focus: [FocusRecord] = []; @Published var subscriptions: [CalendarSubscription] = []
+    @Published var sideNotes: [SideNote] = []; @Published var noteFolders: [SideNoteFolder] = []
     @Published var countdowns: [Countdown] = []; @Published var activity: [ActivityEntry] = []
     @Published var checkingSync = false
     @Published var notificationTask: UUID?; @Published var notificationHabit: UUID?; @Published var notificationCountdown: UUID?; @Published var notificationModule: Module?
@@ -154,7 +155,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         if !persistence.inMemory { automaticBackup(); backupTimer = Timer.scheduledTimer(withTimeInterval: 3600,repeats: true) { [weak self] _ in Task { @MainActor in self?.automaticBackup() } } }
     }
     func reload() {
-        do { if let failure = persistence.loadError { throw ServiceError.message(failure) }; if !persistence.inMemory { try persistence.restoreBlobs() }; tasks = try persistence.load(TaskItem.self); lists = try persistence.load(TaskList.self); filters = try persistence.load(SavedFilter.self); habits = try persistence.load(Habit.self); focus = try persistence.load(FocusRecord.self); subscriptions = try persistence.load(CalendarSubscription.self); countdowns = try persistence.load(Countdown.self); try migrateInlineDocumentImages() } catch { self.error = "读取数据失败：\(error.localizedDescription)" }
+        do { if let failure = persistence.loadError { throw ServiceError.message(failure) }; if !persistence.inMemory { try persistence.restoreBlobs() }; tasks = try persistence.load(TaskItem.self); lists = try persistence.load(TaskList.self); filters = try persistence.load(SavedFilter.self); habits = try persistence.load(Habit.self); focus = try persistence.load(FocusRecord.self); subscriptions = try persistence.load(CalendarSubscription.self); countdowns = try persistence.load(Countdown.self); sideNotes = try persistence.load(SideNote.self); noteFolders = try persistence.load(SideNoteFolder.self); try migrateInlineDocumentImages() } catch { self.error = "读取数据失败：\(error.localizedDescription)" }
         if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { $0.isPendingTask && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
         WidgetSnapshot.write(tasks: tasks, lists: lists) }
     }
@@ -162,7 +163,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         let deletedLists = Set(lists.filter(\.deleted).map(\.id))
         return deletedLists.count + tasks.filter { $0.deleted && $0.trashedWithList.map(deletedLists.contains) != true }.count
     }
-    var backup: Backup { Backup(tasks: tasks, lists: lists, filters: filters, habits: habits, focus: focus, subscriptions: subscriptions, countdowns: countdowns) }
+    var backup: Backup { Backup(tasks: tasks, lists: lists, filters: filters, habits: habits, focus: focus, subscriptions: subscriptions, countdowns: countdowns,sideNotes: sideNotes,noteFolders: noteFolders) }
     @discardableResult func save<T: ListRecord>(_ record: T, undoable: Bool = true) -> Bool {
         let before = undoable ? backup : nil
         do { var prepared = record
@@ -234,6 +235,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
     private func updatePublished<T: ListRecord>(_ record: T) {
         func updated<R: ListRecord>(_ records: [R], _ record: R) -> [R] { var list = records; if let i = list.firstIndex(where: { $0.id == record.id }) { list[i] = record } else { list.append(record) }; return list }
         if let r = record as? TaskItem { tasks = updated(tasks,r); if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { $0.isPendingTask && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count); WidgetSnapshot.write(tasks: tasks,lists: lists) } }
+        if let r = record as? SideNote { sideNotes = updated(sideNotes,r) }; if let r = record as? SideNoteFolder { noteFolders = updated(noteFolders,r) }
         if let r = record as? TaskList { lists = updated(lists,r) }; if let r = record as? SavedFilter { filters = updated(filters,r) }; if let r = record as? Habit { habits = updated(habits,r) }; if let r = record as? FocusRecord { focus = updated(focus,r) }; if let r = record as? CalendarSubscription { subscriptions = updated(subscriptions,r) }; if let r = record as? Countdown { countdowns = updated(countdowns,r) }
     }
     @discardableResult func deleteList(_ id: UUID) -> Bool {
@@ -402,7 +404,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         do {
             try restoreFiles(data.attachmentFiles ?? [:])
             func applyRecords<T: ListRecord>(_ old: [T], _ new: [T]) throws { for var r in old where !new.contains(where: { $0.id == r.id }) { r.deleted = true; try persistence.save(r) }; for r in new { try persistence.save(r) } }
-            try applyRecords(tasks,data.tasks); try applyRecords(lists,data.lists); try applyRecords(filters,data.filters); try applyRecords(habits,data.habits); try applyRecords(focus,data.focus); try applyRecords(subscriptions,data.subscriptions); try applyRecords(countdowns,data.countdowns ?? []); reload(); reschedule()
+            try applyRecords(tasks,data.tasks); try applyRecords(lists,data.lists); try applyRecords(filters,data.filters); try applyRecords(habits,data.habits); try applyRecords(focus,data.focus); try applyRecords(subscriptions,data.subscriptions); try applyRecords(countdowns,data.countdowns ?? []); if let notes = data.sideNotes { try applyRecords(sideNotes,notes) }; if let folders = data.noteFolders { try applyRecords(noteFolders,folders) }; reload(); reschedule()
         } catch { self.error = error.localizedDescription }
     }
     func reschedule() { guard !persistence.inMemory else { return }; for task in tasks { NotificationService.shared.schedule(task) }; for habit in habits { NotificationService.shared.schedule(habit) }; for day in countdowns { NotificationService.shared.schedule(day) } }
@@ -429,7 +431,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
     func restoreFiles(_ files: [String: Data]) throws {
         for (path, data) in files { guard path.hasPrefix("Attachments/"), !path.contains(".."), !path.hasPrefix("/") else { throw ServiceError.message("备份包含非法附件路径") }; let url = persistence.root.appendingPathComponent(path); try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),withIntermediateDirectories: true); try data.write(to: url,options: .atomic); try persistence.saveBlob(path: path,data: data) }
     }
-    func export(to url: URL) throws { var snapshot = backup; var files: [String: Data] = [:]; for a in tasks.flatMap(\.attachments) { if let data = try? Data(contentsOf: persistence.root.appendingPathComponent(a.relativePath)) { files[a.relativePath] = data } }; snapshot.attachmentFiles = files; let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted,.sortedKeys]; try encoder.encode(snapshot).write(to: url, options: .atomic) }
+    func export(to url: URL) throws { var snapshot = backup; var files: [String: Data] = [:]; for a in tasks.flatMap(\.attachments) + sideNotes.flatMap(\.attachments) { if let data = try? Data(contentsOf: persistence.root.appendingPathComponent(a.relativePath)) { files[a.relativePath] = data } }; snapshot.attachmentFiles = files; let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted,.sortedKeys]; try encoder.encode(snapshot).write(to: url, options: .atomic) }
     func automaticBackup() {
         let folder = persistence.root.appendingPathComponent("Backups"); try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let url = folder.appendingPathComponent("\(Day.key(Date())).ownlist.json"); do { try export(to: url) } catch { self.error = "备份失败：\(error.localizedDescription)" }

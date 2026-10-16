@@ -356,7 +356,7 @@ struct MobileWorkspaceState: Codable, Equatable {
         if !valid { result.selection = "today"; result.listID = nil; result.taskID = nil }
         if result.selection != "list" { result.listID = nil }
         if !tasks.contains(where: { $0.id == result.taskID && !$0.deleted }) { result.taskID = nil }
-        let destinations = ["matrix","countdown","statistics","notifications","settings"]
+        let destinations = ["matrix","countdown","statistics","notifications","settings","notes"]
         result.morePath = Array(morePath.prefix(while: { destinations.contains($0) && ($0 != "matrix" || visibility.isVisible(.matrix)) && ($0 != "countdown" || visibility.isVisible(.countdown)) }))
         return result
     }

@@ -164,7 +164,7 @@ enum TaskDocument {
 }
 
 enum DocumentExport {
-    enum Format: String { case word = "docx", pdf = "pdf", markdown = "md" }
+    enum Format: String { case word = "docx", pdf = "pdf", markdown = "md", html = "html" }
     static func content(task: TaskItem, children: [TaskItem],baseURL: URL? = nil) -> NSAttributedString {
         var title = DocumentStyle.body; title[.font] = NSFont.boldSystemFont(ofSize:24)
         title[.ziloBlock] = ["kind":"heading","level":"1","title":"1"]
@@ -180,6 +180,7 @@ enum DocumentExport {
     static func write(task: TaskItem, children: [TaskItem], format: Format, to url: URL,baseURL: URL? = nil) throws {
         let content = content(task: task, children: children,baseURL: baseURL)
         switch format {
+        case .html: try HTMLDocument.data(task: task,children: children,baseURL: baseURL).write(to: url,options: .atomic)
         case .word: try WordDocument.data(content).write(to: url, options: .atomic)
         case .markdown:
             if task.editingMode == .markdown {

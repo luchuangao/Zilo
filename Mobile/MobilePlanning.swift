@@ -232,7 +232,7 @@ struct MobileMoreView: View {
                     NavigationLink(value: "statistics") { Label("统计与回顾",systemImage: "chart.bar") }
                 }
                 Section {
-                    NavigationLink(value: "notifications") { Label("通知与活动",systemImage: "bell") }
+                    NavigationLink(value: "notes") { Label("便签",systemImage: "note.text") }; NavigationLink(value: "notifications") { Label("通知与活动",systemImage: "bell") }
                     NavigationLink(value: "settings") { Label("设置",systemImage: "gearshape") }
                 }
             }.navigationTitle("更多")
@@ -241,6 +241,7 @@ struct MobileMoreView: View {
                     case "matrix": MobileMatrixView()
                     case "countdown": MobileCountdownView()
                     case "statistics": MobileStatisticsView()
+                    case "notes": MobileSideNotesView()
                     case "notifications": MobileNotificationInbox()
                     case "settings": MobileSettings()
                     default: EmptyView()
