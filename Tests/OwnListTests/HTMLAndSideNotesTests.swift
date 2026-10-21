@@ -135,6 +135,29 @@ final class HTMLAndSideNotesTests: XCTestCase {
         var full = legacy; full.sideNotes = []; full.noteFolders = []
         restored.apply(full); XCTAssertTrue(restored.sideNotes.allSatisfy(\.deleted))
     }
+    @MainActor func testPaperColorsPreserveStoredKeysAndRoundTripThroughBackup() throws {
+        let store = Store(persistence: Persistence(inMemory: true))
+        for key in ["none","yellow","blue","green","purple","pink","orange","teal"] {
+            let id = try XCTUnwrap(store.createSideNote(text: "颜色 " + key))
+            store.updateSideNote(id) { $0.color = key }
+        }
+        let restored = Store(persistence: Persistence(inMemory: true))
+        restored.apply(try JSONDecoder().decode(Backup.self,from: JSONEncoder().encode(store.backup)))
+        XCTAssertEqual(Set(restored.sideNotes.map(\.color)),Set(SideNotesLibrary.colors))
+        XCTAssertEqual(SideNotePaper(stored: "future-color"),.none)
+    }
+    func testPaperBackgroundsHaveReadableTextInBothAppearances() {
+        func luminance(_ hex: UInt32) -> Double {
+            func linear(_ value: UInt32) -> Double { let v = Double(value)/255; return v <= 0.04045 ? v/12.92 : pow((v+0.055)/1.055,2.4) }
+            return 0.2126*linear((hex >> 16)&255) + 0.7152*linear((hex >> 8)&255) + 0.0722*linear(hex&255)
+        }
+        for paper in SideNotePaper.allCases {
+            for dark in [false,true] {
+                let background = luminance(paper.hex(dark: dark)),text = luminance(dark ? 0xECEEF4 : 0x242730)
+                XCTAssertGreaterThanOrEqual((max(background,text)+0.05)/(min(background,text)+0.05),4.5,paper.rawValue)
+            }
+        }
+    }
     private func imagePNG() throws -> Data {
         let image = NSImage(size: NSSize(width: 4,height: 4)); image.lockFocus(); NSColor.systemBlue.setFill(); NSBezierPath(rect: NSRect(x: 0,y: 0,width: 4,height: 4)).fill(); image.unlockFocus()
         return try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation))?.representation(using: .png,properties: [:]))

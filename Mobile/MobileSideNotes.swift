@@ -8,6 +8,7 @@ extension MobileStore: SideNotesStore {
 }
 private struct MobileSideNoteSelection: Identifiable { var id: UUID }
 struct MobileSideNotesView: View {
+    @Environment(\.colorScheme) private var scheme
     @EnvironmentObject private var store: MobileStore
     @Environment(\.mobileAccent) private var accent
     @State private var folderID: UUID?
@@ -54,13 +55,13 @@ struct MobileSideNotesView: View {
                                     if folderID == nil,let folder = folders.first(where: { $0.id == note.folderID }) { badge(folder.name,symbol: "folder") }
                                 }
                             }
-                        }.padding(17).frame(maxWidth: .infinity,alignment: .leading).background(note.color == "none" ? Color(uiColor: .secondarySystemGroupedBackground) : MobileTheme.color(note.color).opacity(0.13),in: RoundedRectangle(cornerRadius: 16))
+                        }.padding(17).frame(maxWidth: .infinity,alignment: .leading).background(SideNotePaper(stored: note.color).color(dark: scheme == .dark),in: RoundedRectangle(cornerRadius: 16))
                     }.buttonStyle(.plain).contextMenu {
                         if note.deleted { Button("恢复便签",systemImage: "arrow.uturn.backward") { store.updateSideNote(note.id) { $0.deleted = false } } }
                         else {
                             Button(note.pinned ? "取消置顶" : "置顶",systemImage: "pin") { store.updateSideNote(note.id) { $0.pinned.toggle() } }
                             Button(note.folded ? "展开便签" : "折叠便签",systemImage: "rectangle.compress.vertical") { store.updateSideNote(note.id) { $0.folded.toggle() } }
-                            Menu("颜色") { ForEach(SideNotesLibrary.colors,id: \.self) { color in Button(LocalizedStringKey(noteColorName(color))) { store.updateSideNote(note.id) { $0.color = color } } } }
+                            MobileNoteColorMenu(current: note.color) { color in store.updateSideNote(note.id) { $0.color = color } }
                             Menu("移动到文件夹") { Button("未分类") { store.updateSideNote(note.id) { $0.folderID = nil } }; ForEach(folders) { folder in Button(folder.name) { store.updateSideNote(note.id) { $0.folderID = folder.id } } } }
                             if let document { Button("HTML 网页（.html）",systemImage: "square.and.arrow.up") { export(document) } }
                             Button("删除便签",systemImage: "trash",role: .destructive) { store.updateSideNote(note.id) { $0.deleted = true } }
@@ -90,6 +91,7 @@ struct MobileSideNotesView: View {
 
 struct MobileSideNoteEditor: View {
     var noteID: UUID
+    @Environment(\.colorScheme) private var scheme
     @EnvironmentObject private var store: MobileStore
     @Environment(\.dismiss) private var dismiss
     @State private var preview = false
@@ -114,7 +116,7 @@ struct MobileSideNoteEditor: View {
                         }
                         Text("自动保存").font(.caption).foregroundStyle(.secondary)
                     }.padding(20)
-                }.background(note.color == "none" ? Color(uiColor: .systemBackground) : MobileTheme.color(note.color).opacity(0.08))
+                }.background(SideNotePaper(stored: note.color).color(dark: scheme == .dark))
             } else { MobileEmpty(title: "关联任务暂不可用，请同步后重试。",detail: "",icon: "note.text") }
         }.navigationTitle("便签").navigationBarTitleDisplayMode(.inline).toolbar {
             ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
@@ -123,7 +125,7 @@ struct MobileSideNoteEditor: View {
                     if note.deleted { Button("恢复便签") { store.updateSideNote(noteID) { $0.deleted = false } } }
                     else {
                         Button(note.pinned ? "取消置顶" : "置顶",systemImage: "pin") { store.updateSideNote(noteID) { $0.pinned.toggle() } }
-                        Menu("颜色") { ForEach(SideNotesLibrary.colors,id: \.self) { color in Button(LocalizedStringKey(noteColorName(color))) { store.updateSideNote(noteID) { $0.color = color } } } }
+                        MobileNoteColorMenu(current: note.color) { color in store.updateSideNote(noteID) { $0.color = color } }
                         Menu("移动到文件夹") { Button("未分类") { store.updateSideNote(noteID) { $0.folderID = nil } }; ForEach(store.noteFolders.filter { !$0.deleted }) { folder in Button(folder.name) { store.updateSideNote(noteID) { $0.folderID = folder.id } } } }
                         if let document { Button("复制内容",systemImage: "doc.on.doc") { UIPasteboard.general.string = document.notes }; Button("HTML 网页（.html）",systemImage: "square.and.arrow.up") { do { exported = MobileHTMLFile(url: try HTMLDocument.temporaryFile(task: document,baseURL: store.persistence.root)) } catch { store.error = error.localizedDescription } } }
                         Button("删除便签",systemImage: "trash",role: .destructive) { store.updateSideNote(noteID) { $0.deleted = true }; dismiss() }
@@ -133,4 +135,16 @@ struct MobileSideNoteEditor: View {
         }.sheet(item: $exported) { MobileShare(items: [$0.url]) }
     }
 }
-private func noteColorName(_ name: String) -> String { ["none":"无颜色","yellow":"黄色","blue":"蓝色","green":"绿色","purple":"紫色","pink":"粉色"][name] ?? "无颜色" }
+private struct MobileNoteColorMenu: View {
+    var current: String
+    var select: (String) -> Void
+    var body: some View {
+        Menu("颜色") {
+            ForEach(SideNotePaper.allCases) { paper in
+                Toggle(isOn: Binding(get: { SideNotePaper(stored: current) == paper },set: { if $0 { select(paper.rawValue) } })) {
+                    Label { Text(LocalizedStringKey(paper.title)) } icon: { paper.swatch }
+                }
+            }
+        }
+    }
+}

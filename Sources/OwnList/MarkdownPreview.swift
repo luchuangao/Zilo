@@ -125,6 +125,8 @@ struct MarkdownPreviewView: NSViewRepresentable {
     var source: String
     var baseURL: URL?
     var onChangeLanguage: ((String) -> Void)? = nil
+    var paperBackground: UInt32? = nil
+    var compact = false
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("accent") private var themeID = "blue"
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -136,27 +138,39 @@ struct MarkdownPreviewView: NSViewRepresentable {
         view.navigationDelegate = context.coordinator
         view.setAccessibilityLabel("Markdown 预览正文")
         context.coordinator.onChangeLanguage = onChangeLanguage
+        context.coordinator.paperBackground = paperBackground
+        context.coordinator.compact = compact
         context.coordinator.update(source,root: baseURL,dark: colorScheme == .dark,theme: themeID,in: view)
         view.loadHTMLString(Self.page,baseURL: nil)
         return view
     }
     func updateNSView(_ view: WKWebView,context: Context) {
         context.coordinator.onChangeLanguage = onChangeLanguage
+        context.coordinator.paperBackground = paperBackground
+        context.coordinator.compact = compact
         context.coordinator.update(source,root: baseURL,dark: colorScheme == .dark,theme: themeID,in: view)
     }
     final class Coordinator: NSObject,WKNavigationDelegate,WKURLSchemeHandler {
         var source: String?; var root: URL?; var dark = false; var theme = ""; var ready = false
         var onChangeLanguage: ((String) -> Void)?
+        var paperBackground: UInt32?
+        var compact = false
+        var displayedPaper: UInt32?
+        var displayedCompact = false
         var rendered = MarkdownRenderer.Result(html: "",codes: [])
         func update(_ value: String,root: URL?,dark: Bool,theme: String = "blue",in view: WKWebView) {
-            guard value != source || root != self.root || dark != self.dark || theme != self.theme else { return }
+            guard value != source || root != self.root || dark != self.dark || theme != self.theme || paperBackground != displayedPaper || compact != displayedCompact else { return }
             self.source = value; self.root = root; self.dark = dark; self.theme = theme
+            displayedPaper = paperBackground; displayedCompact = compact
             rendered = MarkdownRenderer.shared.render(value)
             if ready { display(in: view) }
         }
         func display(in view: WKWebView) {
             guard let data = try? JSONSerialization.data(withJSONObject: [rendered.html,dark,String(format: "#%06X",AppTheme.resolve(theme).value("accent",dark: dark))]),let args = String(data: data,encoding: .utf8) else { return }
-            view.evaluateJavaScript("updatePreview.apply(null," + args + ")",completionHandler: nil)
+            let paper = paperBackground.map { String(format: "#%06X",$0) } ?? ""
+            let styling = "document.documentElement.style.setProperty('--bg','" + paper + "');document.body.style.paddingBottom='" + (compact ? "8px" : "32px") + "';document.documentElement.style.fontSize='" + (compact ? "13px" : "14px") + "';"
+            view.setValue(false,forKey: "drawsBackground")
+            view.evaluateJavaScript("updatePreview.apply(null," + args + ");" + styling,completionHandler: nil)
         }
         func webView(_ webView: WKWebView,didFinish navigation: WKNavigation!) { ready = true; display(in: webView) }
         func webView(_ webView: WKWebView,decidePolicyFor action: WKNavigationAction,decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {

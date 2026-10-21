@@ -546,11 +546,17 @@ final class DocumentScrollView: NSScrollView {
 }
 
 struct RichTextEditor: NSViewRepresentable {
-    var text: String; var data: Data?; var onChange: (String,Data?) -> Void
+    var text: String; var data: Data?; var paperStyle = false; var onChange: (String,Data?) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
         let editor = DocumentTextView(); editor.isRichText = true; editor.importsGraphics = true; editor.isEditable = true; editor.isSelectable = true; editor.allowsUndo = true; editor.usesFontPanel = true; editor.isAutomaticLinkDetectionEnabled = true; editor.isVerticallyResizable = true; editor.isHorizontallyResizable = false; editor.autoresizingMask = [.width]; editor.textContainer?.widthTracksTextView = true; editor.textContainerInset = NSSize(width: 8,height: 8)
+        if paperStyle {
+            scroll.borderType = .noBorder; scroll.drawsBackground = false
+            scroll.autohidesScrollers = true; scroll.scrollerStyle = .overlay
+            editor.drawsBackground = false; editor.textContainerInset = NSSize(width: 0,height: 3)
+            editor.setAccessibilityLabel(ZiloLanguage.text("便签内容"))
+        }
         scroll.documentView = editor; populate(editor); context.coordinator.attach(editor)
         return scroll
     }

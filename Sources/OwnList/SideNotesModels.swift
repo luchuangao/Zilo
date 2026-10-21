@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 
 struct SideNoteFolder: ListRecord, Hashable {
     static let kind = "sideNoteFolder"
@@ -20,7 +21,7 @@ struct SideNote: ListRecord, Hashable {
     }
 }
 enum SideNotesLibrary {
-    static let colors = ["none","yellow","blue","green","purple","pink"]
+    static let colors = SideNotePaper.allCases.map(\.rawValue)
     static func visible(_ notes: [SideNote],tasks: [TaskItem],folderID: UUID? = nil,search: String = "",trash: Bool = false) -> [SideNote] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         return notes.filter { note in
@@ -92,4 +93,58 @@ enum SideNotesLibrary {
         } catch { self.error = error.localizedDescription; return false }
     }
     func validNoteFolder(_ id: UUID?) -> UUID? { noteFolders.contains { $0.id == id && !$0.deleted } ? id : nil }
+}
+
+/// Stable storage keys preserve existing notes while both platforms share paper colors.
+enum SideNotePaper: String, CaseIterable, Identifiable {
+    case none, yellow, blue, green, purple, pink, orange, teal
+    var id: String { rawValue }
+    init(stored: String) { self = Self(rawValue: stored) ?? .none }
+    var title: String {
+        switch self {
+        case .none: return "纸白"
+        case .yellow: return "奶油黄"
+        case .blue: return "雾蓝"
+        case .green: return "鼠尾草绿"
+        case .purple: return "薰衣草紫"
+        case .pink: return "玫瑰粉"
+        case .orange: return "杏桃橙"
+        case .teal: return "海盐青"
+        }
+    }
+    func hex(dark: Bool) -> UInt32 {
+        switch self {
+        case .none: return dark ? 0x292A2D : 0xFFFEFA
+        case .yellow: return dark ? 0x383326 : 0xFFF5D8
+        case .blue: return dark ? 0x283340 : 0xEAF2FC
+        case .green: return dark ? 0x2C372E : 0xEDF3E7
+        case .purple: return dark ? 0x332E40 : 0xF1ECFA
+        case .pink: return dark ? 0x3D2D34 : 0xFBECEF
+        case .orange: return dark ? 0x403125 : 0xFFF0E3
+        case .teal: return dark ? 0x253A38 : 0xE6F4F0
+        }
+    }
+    var swatchHex: UInt32 {
+        switch self {
+        case .none: return 0xF1EDE3
+        case .yellow: return 0xE8C56D
+        case .blue: return 0x91B4DD
+        case .green: return 0xA7BD94
+        case .purple: return 0xB9A6D7
+        case .pink: return 0xDDA6B3
+        case .orange: return 0xE8B087
+        case .teal: return 0x8BBFB4
+        }
+    }
+    func color(dark: Bool) -> Color { Self.color(hex(dark: dark)) }
+    static func color(_ hex: UInt32) -> Color {
+        Color(red: Double((hex >> 16) & 255)/255,green: Double((hex >> 8) & 255)/255,blue: Double(hex & 255)/255)
+    }
+    var swatch: Image {
+        Image(size: CGSize(width: 14,height: 14)) { context in
+            let shape = Path(ellipseIn: CGRect(x: 1,y: 1,width: 12,height: 12))
+            context.fill(shape,with: .color(Self.color(swatchHex)))
+            context.stroke(shape,with: .color(.black.opacity(0.12)),lineWidth: 0.5)
+        }.renderingMode(.original)
+    }
 }
