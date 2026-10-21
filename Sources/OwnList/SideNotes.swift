@@ -51,10 +51,17 @@ enum SideNotesDockLayout {
         guard let panel else { return }
         let target = SideNotesDockLayout.frame(screen: screen,width: panel.frame.width,contentHeight: measuredHeight)
         let wasVisible = panel.isVisible && presented
-        animation = UUID(); presented = true
+        let token = UUID(); animation = token; presented = true
         if !wasVisible { panel.setFrame(NSRect(x: screen.maxX+8,y: target.minY,width: target.width,height: target.height),display: false) }
         panel.makeKeyAndOrderFront(nil)
-        NSAnimationContext.runAnimationGroup { context in context.duration = wasVisible ? 0 : 0.18; panel.animator().setFrame(target,display: true) }
+        NSAnimationContext.runAnimationGroup { context in context.duration = wasVisible ? 0 : 0.18; panel.animator().setFrame(target,display: true) } completionHandler: { [weak self] in
+            Task { @MainActor in
+                guard let self,self.animation == token,self.presented else { return }
+                // The view can report its content height during the slide-in.
+                // Apply it after the animation so its original target cannot undo the resize.
+                self.fitContent(self.measuredHeight-24)
+            }
+        }
     }
     func hide() {
         guard let panel else { return }
