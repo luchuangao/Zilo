@@ -4,6 +4,15 @@ import UIKit
 @testable import Zilo
 
 final class MobileStoreTests: XCTestCase {
+    func testMindMapLabelsWrapWithoutLosingQueryText() throws {
+        let diagram = try MindMapDocument.parse("mindmap\n  PromQL\n    即时查询 (Instant Query)\n    范围查询 (Range Query)\n    指标名称可以放到大括号里作为筛选条件")
+        for node in diagram.nodes {
+            XCTAssertEqual(node.lines.joined(),node.title)
+            XCTAssertGreaterThanOrEqual(node.rect.height,CGFloat(node.lines.count)*20+24)
+            for line in node.lines { XCTAssertLessThanOrEqual((line as NSString).size(withAttributes: [.font:UIFont.systemFont(ofSize: 14)]).width,170) }
+        }
+        XCTAssertFalse(MindMapDocument.svg(diagram).contains("foreignObject"))
+    }
     func testEditingTitlePreservesMacDocumentMetadata() async throws {
         try await MainActor.run {
             let p = Persistence(inMemory: true); let store = MobileStore(persistence: p)

@@ -12,36 +12,73 @@ extension Store: SideNotesStore {
     @Published var selected: UUID?
     @Published var reveal = UUID()
 }
+enum SideNotesDockLayout {
+    static func frame(screen: NSRect,width: CGFloat = 320,contentHeight: CGFloat) -> NSRect {
+        let width = min(max(280,width),min(480,screen.width))
+        let height = min(max(240,contentHeight),max(240,screen.height-32))
+        return NSRect(x: screen.maxX-width,y: screen.maxY-16-height,width: width,height: height)
+    }
+}
+
 @MainActor final class SideNotesPanel {
     static let shared = SideNotesPanel()
     private var panel: NSPanel?
     private var edge: NSPanel?
     private weak var store: Store?
+    private var presented = false
+    private var animation = UUID()
+    private var measuredHeight: CGFloat = 300
+    private var resizeWork: DispatchWorkItem?
     let selection = SideNotesSelection()
     func configure(_ store: Store) {
         self.store = store
         DesktopBridge.notesAction = { [weak self] in self?.toggle() }
         updateEdge()
     }
+    private var screen: NSRect { panel?.screen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? NSRect(x: 0,y: 0,width: 1440,height: 900) }
     func show(_ store: Store,taskID: UUID? = nil) {
         self.store = store
         if let taskID { selection.selected = store.linkSideNote(taskID: taskID); selection.reveal = UUID() }
         if panel == nil {
-            let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0,y: 0,width: 1440,height: 900)
-            let size = NSSize(width: 410,height: min(820,screen.height - 24))
-            let window = NSPanel(contentRect: NSRect(x: screen.maxX - size.width - 12,y: screen.midY - size.height / 2,width: size.width,height: size.height),styleMask: [.titled,.closable,.resizable,.nonactivatingPanel],backing: .buffered,defer: false)
+            let window = NSPanel(contentRect: SideNotesDockLayout.frame(screen: screen,contentHeight: measuredHeight),styleMask: [.titled,.closable,.resizable,.nonactivatingPanel],backing: .buffered,defer: false)
             window.title = ZiloLanguage.text("便签"); window.isReleasedWhenClosed = false
-            window.minSize = NSSize(width: 340,height: 420); window.level = .floating
-            window.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]
-            window.hidesOnDeactivate = false
-            window.contentView = NSHostingView(rootView: SideNotesView(selection: selection).environmentObject(store).environment(\.locale,ZiloLanguage.locale).themeAppearance())
+            window.minSize = NSSize(width: 280,height: 240); window.maxSize = NSSize(width: 480,height: screen.height)
+            window.level = .floating; window.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]; window.hidesOnDeactivate = false
+            let host = NotesHostingView(rootView: SideNotesView(selection: selection).environmentObject(store).environment(\.locale,ZiloLanguage.locale).themeAppearance())
+            host.onHide = { [weak self] in self?.hide() }; window.contentView = host
             panel = window
         }
-        panel?.makeKeyAndOrderFront(nil)
+        guard let panel else { return }
+        let target = SideNotesDockLayout.frame(screen: screen,width: panel.frame.width,contentHeight: measuredHeight)
+        let wasVisible = panel.isVisible && presented
+        animation = UUID(); presented = true
+        if !wasVisible { panel.setFrame(NSRect(x: screen.maxX+8,y: target.minY,width: target.width,height: target.height),display: false) }
+        panel.makeKeyAndOrderFront(nil)
+        NSAnimationContext.runAnimationGroup { context in context.duration = wasVisible ? 0 : 0.18; panel.animator().setFrame(target,display: true) }
+    }
+    func hide() {
+        guard let panel else { return }
+        presented = false; let token = UUID(); animation = token
+        var target = panel.frame; target.origin.x = screen.maxX+8
+        NSAnimationContext.runAnimationGroup { context in context.duration = 0.16; panel.animator().setFrame(target,display: true) } completionHandler: { [weak self] in
+            Task { @MainActor in guard let self,self.animation == token else { return }; self.panel?.orderOut(nil) }
+        }
     }
     func toggle() {
-        if panel?.isVisible == true { panel?.orderOut(nil) }
+        if panel?.isVisible == true && presented { hide() }
         else if let store { show(store) }
+    }
+    func fitContent(_ height: CGFloat) {
+        guard height.isFinite,height > 0 else { return }
+        // Preserve the top-right anchor while content grows or folds away.
+        measuredHeight = height + 24
+        resizeWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,let panel = self.panel,self.presented,!panel.inLiveResize else { return }
+            let target = SideNotesDockLayout.frame(screen: self.screen,width: panel.frame.width,contentHeight: self.measuredHeight)
+            if abs(target.height-panel.frame.height) > 1 { panel.setFrame(target,display: true) }
+        }
+        resizeWork = work; DispatchQueue.main.asyncAfter(deadline: .now()+0.06,execute: work)
     }
     func updateEdge() {
         guard UserDefaults.standard.object(forKey: "sideNotesEdgeEnabled") as? Bool != false,let screen = NSScreen.main?.visibleFrame else { edge?.orderOut(nil); return }
@@ -49,14 +86,40 @@ extension Store: SideNotesStore {
             let tab = NSPanel(contentRect: .zero,styleMask: [.borderless,.nonactivatingPanel],backing: .buffered,defer: false)
             tab.backgroundColor = .clear; tab.isOpaque = false; tab.hasShadow = false; tab.level = .floating
             tab.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]; tab.hidesOnDeactivate = false
-            tab.contentView = NSHostingView(rootView: Button { [weak self] in self?.toggle() } label: {
-                Image(systemName: "note.text").font(.system(size: 13)).foregroundStyle(.white).frame(width: 23,height: 76).background(Color.accentColor.opacity(0.8),in: RoundedRectangle(cornerRadius: 7))
-            }.buttonStyle(.plain).help("打开便签").accessibilityLabel("打开便签"))
-            edge = tab
+            let handle = NotesEdgeHandle(); handle.open = { [weak self] in if let self,let store = self.store { self.show(store) } }
+            handle.toggle = { [weak self] in self?.toggle() }; tab.contentView = handle; edge = tab
         }
-        edge?.setFrame(NSRect(x: screen.maxX - 23,y: screen.midY - 38,width: 23,height: 76),display: true)
+        edge?.setFrame(NSRect(x: screen.maxX-18,y: screen.midY-32,width: 18,height: 64),display: true)
         edge?.orderFrontRegardless()
     }
+}
+
+private final class NotesEdgeHandle: NSView {
+    var open: (() -> Void)?; var toggle: (() -> Void)?
+    private var start: NSPoint?; private var dragged = false; private var travel: CGFloat = 0
+    override func draw(_ dirtyRect: NSRect) {
+        NSColor.controlAccentColor.withAlphaComponent(0.75).setFill(); NSBezierPath(roundedRect: bounds,xRadius: 6,yRadius: 6).fill()
+        NSColor.white.withAlphaComponent(0.9).setFill(); NSBezierPath(roundedRect: NSRect(x: 7,y: 21,width: 3,height: 22),xRadius: 1.5,yRadius: 1.5).fill()
+    }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { start = NSEvent.mouseLocation; dragged = false }
+    override func mouseDragged(with event: NSEvent) { if !dragged,let start,NSEvent.mouseLocation.x-start.x < -14 { dragged = true; open?() } }
+    override func mouseUp(with event: NSEvent) { if !dragged { toggle?() }; start = nil }
+    override func scrollWheel(with event: NSEvent) {
+        guard abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else { return }
+        if event.phase == .began { travel = 0 }
+        travel += abs(event.scrollingDeltaX)
+        if travel > 16 { open?(); travel = 0 }
+    }
+    override func swipe(with event: NSEvent) { if event.deltaX != 0 { open?() } }
+    override func accessibilityLabel() -> String? { ZiloLanguage.text("向左滑出便签") }
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .button }
+    override func accessibilityPerformPress() -> Bool { toggle?(); return true }
+}
+private final class NotesHostingView<Content: View>: NSHostingView<Content> {
+    var onHide: (() -> Void)?
+    override func swipe(with event: NSEvent) { if event.deltaX > 0 { onHide?() } else { super.swipe(with: event) } }
 }
 
 struct SideNotesView: View {
@@ -69,13 +132,16 @@ struct SideNotesView: View {
     @State private var newFolder = false
     @State private var folderName = ""
     @State private var previews = Set<UUID>()
+    @State private var contentWidth: CGFloat = 320
     private var notes: [SideNote] { SideNotesLibrary.visible(store.sideNotes,tasks: store.tasks,folderID: folderID,search: search,trash: trash) }
     private var folders: [SideNoteFolder] { store.noteFolders.filter { !$0.deleted }.sorted { $0.order < $1.order } }
     var body: some View {
         VStack(spacing: 0) {
+            VStack(spacing: 0) {
             HStack(spacing: 10) {
                 Image(systemName: "note.text").foregroundStyle(Color.accentColor)
                 Text("便签").font(.system(size: 17,weight: .semibold)); Spacer()
+                Button { SideNotesPanel.shared.hide() } label: { Image(systemName: "chevron.right").font(.system(size: 12,weight: .medium)).frame(width: 26,height: 28) }.buttonStyle(.plain).quietHover().help("隐藏便签").accessibilityLabel("隐藏便签")
                 Menu {
                     Button("新建文件夹",systemImage: "folder.badge.plus") { folderName = ""; newFolder = true }
                     Toggle("显示屏幕边缘入口",isOn: $showEdge)
@@ -95,16 +161,20 @@ struct SideNotesView: View {
                 if trash { Text("回收站").font(.caption).foregroundStyle(.secondary) }
             }.padding(.horizontal,16).padding(.bottom,10)
             HStack(spacing: 8) { Image(systemName: "magnifyingglass"); TextField("搜索便签",text: $search).textFieldStyle(.plain); if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain) } }.font(.system(size: 12)).foregroundStyle(ListTheme.secondary).padding(9).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 8)).padding(.horizontal,16).padding(.bottom,12)
+            }
             Divider()
             ScrollViewReader { reader in
-                ScrollView { LazyVStack(spacing: 12) {
-                    if notes.isEmpty { VStack(spacing: 12) { Image(systemName: trash ? "trash" : "note.text").font(.system(size: 30,weight: .light)); Text(trash ? "没有已删除的便签" : search.isEmpty ? "随手记下一个想法" : "没有匹配的便签").font(.subheadline); if !trash && search.isEmpty { Button("新建便签") { selection.selected = store.createSideNote(folderID: folderID); selection.reveal = UUID() } } }.foregroundStyle(ListTheme.secondary).frame(maxWidth: .infinity).padding(.vertical,64) }
+                ScrollView { VStack(spacing: 12) {
+                    if notes.isEmpty { VStack(spacing: 12) { Image(systemName: trash ? "trash" : "note.text").font(.system(size: 26,weight: .light)); Text(trash ? "没有已删除的便签" : search.isEmpty ? "随手记下一个想法" : "没有匹配的便签").font(.subheadline); if !trash && search.isEmpty { Button("新建便签") { selection.selected = store.createSideNote(folderID: folderID); selection.reveal = UUID() } } }.foregroundStyle(ListTheme.secondary).frame(maxWidth: .infinity).padding(.vertical,24) }
                     ForEach(notes) { note in card(note).id(note.id) }
-                }.padding(14) }.onAppear { reveal(reader) }.onChange(of: selection.reveal) { _,_ in reveal(reader) }
+                }.padding(12).fixedSize(horizontal: false,vertical: true) }.onAppear { reveal(reader) }.onChange(of: selection.reveal) { _,_ in reveal(reader) }
             }
             Divider()
             HStack { Text("自动保存"); Spacer(); Text("⌘⌥N").help("显示或隐藏便签") }.font(.system(size: 10)).foregroundStyle(ListTheme.secondary).padding(.horizontal,18).padding(.vertical,10)
         }.background(ListTheme.sidebar).foregroundStyle(ListTheme.text)
+            .onAppear { SideNotesPanel.shared.fitContent(requiredHeight) }
+            .onChange(of: requiredHeight) { _,height in SideNotesPanel.shared.fitContent(height) }
+            .background { GeometryReader { geometry in Color.clear.onAppear { contentWidth = geometry.size.width }.onChange(of: geometry.size.width) { _,width in contentWidth = width } } }
             .onChange(of: showEdge) { _,_ in SideNotesPanel.shared.updateEdge() }
             .onChange(of: store.noteFolders) { _,_ in if let folderID,!folders.contains(where: { $0.id == folderID }) { self.folderID = nil } }
             .sheet(isPresented: $newFolder) { VStack(alignment: .leading,spacing: 16) { Text("新建文件夹").font(.headline); TextField("文件夹名称",text: $folderName).textFieldStyle(.roundedBorder).onSubmit(saveFolder); HStack { Spacer(); Button("取消") { newFolder = false }.keyboardShortcut(.cancelAction); Button("保存",action: saveFolder).keyboardShortcut(.defaultAction).disabled(folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) } }.padding(22).frame(width: 300) }
@@ -131,11 +201,11 @@ struct SideNotesView: View {
                 if let task {
                     if note.deleted { Text(TaskDocument.summary(task)).font(.system(size: 13)).textSelection(.enabled) }
                     else if task.editingMode == .richText {
-                        RichTextEditor(text: task.notes,data: task.richText) { text,data in store.updateSideNoteDocument(note.id,text: text,richText: data) }.frame(minHeight: 170,maxHeight: 300)
+                        RichTextEditor(text: task.notes,data: task.richText) { text,data in store.updateSideNoteDocument(note.id,text: text,richText: data) }.frame(height: editorHeight(task.notes))
                     } else {
                         Picker("正文编辑方式",selection: Binding(get: { previews.contains(note.id) },set: { if $0 { previews.insert(note.id) } else { previews.remove(note.id) } })) { Text("编辑").tag(false); Text("预览").tag(true) }.labelsHidden().pickerStyle(.segmented).frame(width: 118)
-                        if previews.contains(note.id) { MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root).frame(height: 220) }
-                        else { TextEditor(text: Binding(get: { store.sideNotes.first { $0.id == note.id }?.document(tasks: store.tasks)?.notes ?? "" },set: { store.updateSideNoteDocument(note.id,text: $0) })).font(.system(size: 13)).scrollContentBackground(.hidden).frame(minHeight: 150,maxHeight: 280).accessibilityLabel("便签内容") }
+                        if previews.contains(note.id) { MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root).frame(height: max(100,editorHeight(task.notes))) }
+                        else { TextEditor(text: Binding(get: { store.sideNotes.first { $0.id == note.id }?.document(tasks: store.tasks)?.notes ?? "" },set: { store.updateSideNoteDocument(note.id,text: $0) })).font(.system(size: 13)).scrollContentBackground(.hidden).frame(height: editorHeight(task.notes)).accessibilityLabel("便签内容") }
                     }
                 } else { Text("关联任务暂不可用，请同步后重试。").font(.caption).foregroundStyle(ListTheme.secondary) }
             }
@@ -169,6 +239,22 @@ struct SideNotesView: View {
         withAnimation(.easeOut(duration: 0.18)) { reader.scrollTo(id,anchor: .top) }
     }
     private func saveFolder() { if let id = store.createNoteFolder(folderName) { folderID = id; newFolder = false } }
+    private var requiredHeight: CGFloat {
+        if notes.isEmpty { return 310 }
+        return 194 + CGFloat(max(0,notes.count-1))*12 + notes.reduce(CGFloat(0)) { total,note in
+            let badge = note.taskID != nil || (folderID == nil && folders.contains { $0.id == note.folderID })
+            var height: CGFloat = 50 + (badge ? 28 : 0)
+            if !note.folded,let task = note.document(tasks: store.tasks) {
+                height += 10 + (task.editingMode == .markdown ? 34 : 0)
+                height += previews.contains(note.id) ? max(100,editorHeight(task.notes)) : editorHeight(task.notes)
+            }
+            return total+height
+        }
+    }
+    private func editorHeight(_ text: String) -> CGFloat {
+        let bounds = (text as NSString).boundingRect(with: NSSize(width: max(180,contentWidth-62),height: 10000),options: [.usesLineFragmentOrigin,.usesFontLeading],attributes: [.font:NSFont.systemFont(ofSize: 13)])
+        return min(260,max(64,ceil(bounds.height)+24))
+    }
     private func badge(_ title: String,symbol: String,localized: Bool = false) -> some View {
         HStack(spacing: 4) { Image(systemName: symbol); Text(localized ? ZiloLanguage.text(title) : title).lineLimit(1).truncationMode(.middle) }
             .font(.system(size: 10,weight: .medium)).foregroundStyle(ListTheme.secondary).padding(.horizontal,8).padding(.vertical,4).background(ListTheme.input,in: Capsule())

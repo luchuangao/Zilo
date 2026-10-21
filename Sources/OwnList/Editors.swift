@@ -108,11 +108,10 @@ struct TaskDetailView: View {
         do { TaskDocument.switchMode(&current,to: mode,baseURL: store.persistence.root); try store.externalizeDocumentImages(&current); store.save(current) } catch { store.error = error.localizedDescription }
         document.activeFormats = []; previewMarkdown = false; previewSidebar = false
     }
-    var previewSelection: Binding<Bool> {
-        Binding(get: { previewMarkdown },set: { value in
-            document.editor?.unmarkText(); document.editor?.didChangeText()
-            if value { document.editor?.window?.makeFirstResponder(nil) }
-            previewMarkdown = value; previewSidebar = false
+    var previewSelection: Binding<Int> {
+        Binding(get: { previewSidebar ? 2 : previewMarkdown ? 1 : 0 },set: { value in
+            commitDocument()
+            previewMarkdown = value == 1; previewSidebar = value == 2
         })
     }
     func beginEntry(_ entry: String) {
@@ -142,14 +141,11 @@ struct TaskDetailView: View {
             if task.editingMode == .markdown {
                 HStack(spacing: 10) {
                     Spacer()
-                    Picker("正文编辑方式",selection: previewSelection) { Text("编辑").tag(false); Text("预览").tag(true) }.labelsHidden().pickerStyle(.segmented).frame(width: 130)
-                    Button {
-                        document.editor?.unmarkText(); document.editor?.didChangeText()
-                        previewSidebar.toggle(); previewMarkdown = false
-                    } label: { Image(systemName: "sidebar.right").font(.system(size: 16)).frame(width: 28,height: 28) }
-                        .quietHover(selected: previewSidebar).foregroundStyle(previewSidebar ? ListTheme.accent : ListTheme.secondary)
-                        .help(previewSidebar ? "关闭并排预览" : "打开并排预览").accessibilityLabel("并排预览")
-                        .accessibilityAddTraits(previewSidebar ? .isSelected : [])
+                    Picker("正文编辑方式",selection: previewSelection) {
+                        Text("编辑").tag(0)
+                        Text("预览").tag(1)
+                        Image(systemName: "rectangle.split.2x1").tag(2).help("并排预览").accessibilityLabel("并排预览")
+                    }.labelsHidden().pickerStyle(.segmented).frame(width: 174)
                 }
             }
             HStack(alignment: .top,spacing: 0) {
@@ -286,7 +282,7 @@ struct TaskDetailView: View {
             } label: { HStack(spacing: 6) { Image(systemName: "tray.and.arrow.down"); Text(store.lists.first { $0.id == task.listID }?.name ?? ZiloLanguage.text("收集箱")).lineLimit(1) } }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.primary).fixedSize().accessibilityLabel("所属清单")
             Spacer()
-            Button { if previewMarkdown { previewSelection.wrappedValue = false }; showFormatting.toggle() } label: { Text("A").font(.system(size: 18)).underline().frame(width: 28,height: 28).background(showFormatting ? Color.secondary.opacity(0.1) : .clear,in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel("格式工具栏").help("格式工具栏")
+            Button { if previewMarkdown { previewSelection.wrappedValue = 0 }; showFormatting.toggle() } label: { Text("A").font(.system(size: 18)).underline().frame(width: 28,height: 28).background(showFormatting ? Color.secondary.opacity(0.1) : .clear,in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel("格式工具栏").help("格式工具栏")
             Menu { moreActions(task) } label: { Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 32,height: 32).contentShape(Rectangle()) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.primary).fixedSize().accessibilityLabel("任务更多操作").help("任务更多操作")
         }.foregroundStyle(.secondary).padding(.horizontal,24).padding(.vertical,12)

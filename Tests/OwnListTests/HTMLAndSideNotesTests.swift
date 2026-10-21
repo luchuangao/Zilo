@@ -3,6 +3,26 @@ import AppKit
 @testable import OwnList
 
 final class HTMLAndSideNotesTests: XCTestCase {
+    func testLongMindMapLabelsUseIdenticalLinesAndEnoughNodeHeight() throws {
+        let labels = ["即时查询 (Instant Query)","范围查询 (Range Query)","指标名称可以放到大括号里作为筛选条件",String(repeating: "long_identifier_",count: 10),"第一行<br>第二行"]
+        let diagram = try MindMapDocument.parse("mindmap\n  PromQL\n" + labels.map { "    " + $0 }.joined(separator: "\n"))
+        for node in diagram.nodes {
+            XCTAssertEqual(node.lines.joined(),node.title.replacingOccurrences(of: "\n",with: ""))
+            XCTAssertGreaterThanOrEqual(node.rect.height,CGFloat(node.lines.count)*20+24)
+            for line in node.lines { XCTAssertLessThanOrEqual((line as NSString).size(withAttributes: [.font:NSFont.systemFont(ofSize: 14)]).width,170) }
+        }
+        let svg = MindMapDocument.svg(diagram)
+        XCTAssertTrue(svg.contains("<title>即时查询 (Instant Query)</title>"))
+        XCTAssertFalse(svg.contains("foreignObject"))
+        XCTAssertNotNil(MindMapDocument.png(diagram))
+    }
+    func testNotesDockShrinksWithContentAndStaysOnRightOfScreen() {
+        let screen = NSRect(x: -1440,y: 20,width: 1440,height: 880)
+        let small = SideNotesDockLayout.frame(screen: screen,contentHeight: 265)
+        XCTAssertEqual(small.width,320); XCTAssertEqual(small.height,265); XCTAssertEqual(small.maxX,screen.maxX)
+        let large = SideNotesDockLayout.frame(screen: screen,width: 400,contentHeight: 3000)
+        XCTAssertLessThanOrEqual(large.height,screen.height-32); XCTAssertGreaterThanOrEqual(large.minY,screen.minY)
+    }
     @MainActor func testHTMLPreservesDocumentStructureWithoutAppControlsOrScripts() throws {
         var task = TaskItem(); task.title = "标题 <script>alert(1)</script> & 中文"
         task.documentMode = .markdown

@@ -231,28 +231,9 @@ struct MainView: View {
             Divider().padding(.vertical,4)
             if let list = store.lists.first(where: { $0.id == selectedListID }) {
                 optionRow("添加分组","plus") { listOptionsVisible = false; listEditorRequest = ListEditorRequest(existing: list) }
-                optionRow("编辑清单","square.and.pencil") { listOptionsVisible = false; listEditorRequest = ListEditorRequest(existing: list) }
             }
-            Menu {
-                Button("全部任务",systemImage: "square.stack") { openTaskView("all") }
-                Button("收藏",systemImage: "star") { openTaskView("starred") }
-                Button("任务模板",systemImage: "doc.on.doc") { openTaskView("templates") }
-                Button("归档任务",systemImage: "archivebox") { openTaskView("archived") }
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "square.stack").font(.system(size: 16)).frame(width: 20)
-                    Text("其他任务视图").font(.system(size: 13))
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right").font(.system(size: 10))
-                }.padding(.horizontal,10).frame(height: 34).contentShape(Rectangle())
-            }.menuStyle(.borderlessButton).menuIndicator(.hidden).foregroundStyle(ListTheme.text).quietHover()
-            optionRow("搜索任务","magnifyingglass") { listOptionsVisible = false; searchVisible = true }
-            optionRow("桌面便签","note.text") { listOptionsVisible = false; SideNotesPanel.shared.show(store) }
             optionRow("打印","printer") { listOptionsVisible = false; printList() }
-            if let id = selectedListID {
-                Divider().padding(.vertical,4)
-                optionRow("删除清单","trash") { listOptionsVisible = false; if store.deleteList(id) { selection = "trash" } }
-            }
+
         }.padding(8).frame(width: 200).background(ListTheme.canvas)
     }
     func openTaskView(_ key: String) {

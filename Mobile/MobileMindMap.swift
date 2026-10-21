@@ -1,10 +1,11 @@
 import UIKit
 import SwiftUI
+import CoreText
 
 /// A local, deterministic renderer for the indentation-based Mermaid mindmap
 /// subset. No remote renderer or document text leaves the Mac.
 enum MindMapDocument {
-    struct Node { var title: String; var parent: Int?; var depth: Int; var rect = CGRect.zero; var color = 0 }
+    struct Node { var title: String; var parent: Int?; var depth: Int; var rect = CGRect.zero; var color = 0; var lines: [String] = [] }
     struct Diagram { var nodes: [Node]; var size: CGSize; var source: String }
     enum ParseError: LocalizedError {
         case empty, roots, tooLarge, unsupported
@@ -41,10 +42,8 @@ enum MindMapDocument {
             nodes.append(Node(title:title,parent:parent,depth:stack.count,color:branch)); stack.append((indent,nodes.count-1)); original.append(String(repeating:"  ",count:stack.count-1)+text)
         }
         guard !nodes.isEmpty else { throw ParseError.empty }
-        func height(_ i: Int) -> CGFloat {
-            let bounds = (nodes[i].title as NSString).boundingRect(with:CGSize(width:170,height:10000),options:[.usesLineFragmentOrigin,.usesFontLeading],attributes:[.font:UIFont.systemFont(ofSize:14,weight:i == 0 ? .semibold:.regular)],context:nil)
-            return max(42,ceil(bounds.height)+24)
-        }
+        for index in nodes.indices { nodes[index].lines = wrappedLines(nodes[index].title,root: index == 0) }
+        func height(_ i: Int) -> CGFloat { max(42,CGFloat(nodes[i].lines.count) * 20 + 24) }
         var sizes = [CGFloat](repeating:0,count:nodes.count)
         func measure(_ i: Int) -> CGFloat {
             let children = nodes.indices.filter { nodes[$0].parent == i }
@@ -59,6 +58,25 @@ enum MindMapDocument {
         place(0,0)
         return Diagram(nodes:nodes,size:CGSize(width:(nodes.map { $0.rect.maxX }.max() ?? 226)+24,height:h+48),source:"mindmap\n"+original.map { "  "+$0 }.joined(separator:"\n"))
     }
+    static func wrappedLines(_ title: String,root: Bool = false) -> [String] {
+        let font = UIFont.systemFont(ofSize: 14,weight: root ? .semibold : .regular)
+        var lines: [String] = []
+        for paragraph in title.components(separatedBy: "\n") {
+            guard !paragraph.isEmpty else { lines.append(""); continue }
+            let text = paragraph as NSString
+            let attributed = NSAttributedString(string: paragraph,attributes: [.font:font])
+            let typesetter = CTTypesetterCreateWithAttributedString(attributed)
+            var offset = 0
+            while offset < text.length {
+                var count = CTTypesetterSuggestLineBreak(typesetter,offset,166)
+                if count == 0 { count = CTTypesetterSuggestClusterBreak(typesetter,offset,166) }
+                count = max(1,min(count,text.length-offset))
+                lines.append(text.substring(with: NSRange(location: offset,length: count)))
+                offset += count
+            }
+        }
+        return lines
+    }
     static func svg(_ diagram: Diagram) -> String {
         func n(_ x: CGFloat) -> String { String(format:"%.1f",Double(x)) }
         var html = "<svg xmlns=\"http://www.w3.org/2000/svg\" role=\"img\" aria-label=\"思维导图\" viewBox=\"0 0 \(n(diagram.size.width)) \(n(diagram.size.height))\"><rect width=\"100%\" height=\"100%\" fill=\"#FFFFFF\"/>"
@@ -68,7 +86,11 @@ enum MindMapDocument {
         for (i,node) in diagram.nodes.enumerated() {
             let r = node.rect; let color = palette[node.color]
             html += "<rect x=\"\(n(r.minX))\" y=\"\(n(r.minY))\" width=\"\(n(r.width))\" height=\"\(n(r.height))\" rx=\"10\" fill=\"\(i == 0 ? "#526AE8":"#F5F6FA")\" stroke=\"#\(color)\"/>"
-            html += "<foreignObject x=\"\(n(r.minX+16))\" y=\"\(n(r.minY+10))\" width=\"170\" height=\"\(n(r.height-20))\"><div xmlns=\"http://www.w3.org/1999/xhtml\" style=\"font: \(i == 0 ? "600":"400") 14px -apple-system,sans-serif;line-height:1.4;color:\(i == 0 ? "white":"#242730");overflow-wrap:anywhere;white-space:pre-wrap\">\(MarkdownRenderer.escape(node.title))</div></foreignObject>"
+            html += "<g aria-label=\"\(MarkdownRenderer.escape(node.title))\"><title>\(MarkdownRenderer.escape(node.title))</title>"
+            for (lineIndex,line) in node.lines.enumerated() {
+                html += "<text x=\"\(n(r.minX+16))\" y=\"\(n(r.minY+12+CGFloat(lineIndex)*20+14))\" xml:space=\"preserve\" style=\"font: \(i == 0 ? "600":"400") 14px -apple-system,sans-serif;fill:\(i == 0 ? "white":"#242730")\">\(MarkdownRenderer.escape(line))</text>"
+            }
+            html += "</g>"
         }
         return html+"</svg>"
     }
