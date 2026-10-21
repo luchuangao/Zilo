@@ -158,6 +158,53 @@ final class HTMLAndSideNotesTests: XCTestCase {
             }
         }
     }
+    func testRapidFoldReversalUsesIntendedHeightAndIgnoresStaleCompletion() {
+        var resize = SideNotesFoldResize()
+        let opening = resize.begin(height: 300,delta: 80)
+        XCTAssertEqual(resize.target,380)
+        let closing = resize.begin(height: 326,delta: -80)
+        XCTAssertEqual(resize.target,300)
+        XCTAssertFalse(resize.finish(opening)); XCTAssertEqual(resize.target,300)
+        XCTAssertTrue(resize.finish(closing)); XCTAssertNil(resize.target)
+    }
+    func testHidingDrawerInvalidatesAnInFlightFoldCompletion() {
+        var resize = SideNotesFoldResize()
+        let old = resize.begin(height: 300,delta: 100)
+        resize.cancel(); XCTAssertFalse(resize.finish(old)); XCTAssertNil(resize.target)
+        _ = resize.begin(height: 250,delta: 60); XCTAssertEqual(resize.target,310)
+    }
+    @MainActor func testEdgeHoverDebouncesAndCancelsAfterPointerLeaves() async throws {
+        let hover = SideNotesHoverBehavior(openDelay: 10_000_000,closeDelay: 10_000_000)
+        var inside = true; var shows = 0
+        hover.containsPointer = { inside }; hover.onShow = { shows += 1 }
+        hover.enterEdge(); inside = false; hover.leave()
+        try await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(shows,0)
+        inside = true; hover.enterEdge()
+        try await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(shows,1); hover.cancel()
+    }
+    @MainActor func testPointerTransferToPanelCancelsPendingAutoHide() async throws {
+        let hover = SideNotesHoverBehavior(openDelay: 10_000_000,closeDelay: 10_000_000)
+        var inside = false; var hides = 0
+        hover.containsPointer = { inside }; hover.onHide = { hides += 1 }
+        hover.leave(); inside = true; hover.enterPanel()
+        try await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(hides,0)
+        inside = false; hover.leave()
+        try await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertEqual(hides,1)
+    }
+    @MainActor func testAutoHideWaitsForEditingAndMenusToFinish() async throws {
+        let hover = SideNotesHoverBehavior(openDelay: 10_000_000,closeDelay: 10_000_000)
+        var editing = true; var menu = false; var hides = 0
+        hover.containsPointer = { false }; hover.canHide = { !editing && !menu }; hover.onHide = { hides += 1 }
+        hover.leave(); try await Task.sleep(nanoseconds: 60_000_000); XCTAssertEqual(hides,0)
+        editing = false; menu = true
+        hover.leave(); try await Task.sleep(nanoseconds: 60_000_000); XCTAssertEqual(hides,0)
+        menu = false
+        hover.leave(); try await Task.sleep(nanoseconds: 60_000_000); XCTAssertEqual(hides,1)
+    }
     private func imagePNG() throws -> Data {
         let image = NSImage(size: NSSize(width: 4,height: 4)); image.lockFocus(); NSColor.systemBlue.setFill(); NSBezierPath(rect: NSRect(x: 0,y: 0,width: 4,height: 4)).fill(); image.unlockFocus()
         return try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(image.tiffRepresentation))?.representation(using: .png,properties: [:]))

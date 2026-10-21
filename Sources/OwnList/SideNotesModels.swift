@@ -102,7 +102,7 @@ enum SideNotePaper: String, CaseIterable, Identifiable {
     init(stored: String) { self = Self(rawValue: stored) ?? .none }
     var title: String {
         switch self {
-        case .none: return "纸白"
+        case .none: return "纯白"
         case .yellow: return "奶油黄"
         case .blue: return "雾蓝"
         case .green: return "鼠尾草绿"
@@ -114,7 +114,7 @@ enum SideNotePaper: String, CaseIterable, Identifiable {
     }
     func hex(dark: Bool) -> UInt32 {
         switch self {
-        case .none: return dark ? 0x292A2D : 0xFFFEFA
+        case .none: return dark ? 0x292A2D : 0xFFFFFF
         case .yellow: return dark ? 0x383326 : 0xFFF5D8
         case .blue: return dark ? 0x283340 : 0xEAF2FC
         case .green: return dark ? 0x2C372E : 0xEDF3E7
@@ -126,7 +126,7 @@ enum SideNotePaper: String, CaseIterable, Identifiable {
     }
     var swatchHex: UInt32 {
         switch self {
-        case .none: return 0xF1EDE3
+        case .none: return 0xFFFFFF
         case .yellow: return 0xE8C56D
         case .blue: return 0x91B4DD
         case .green: return 0xA7BD94
