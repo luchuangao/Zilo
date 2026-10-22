@@ -8,6 +8,7 @@ struct SideNoteFolder: ListRecord, Hashable {
 struct SideNote: ListRecord, Hashable {
     static let kind = "sideNote"
     var id = UUID(); var deleted = false; var title = ""; var text = ""
+    var permanentlyDeleted: Bool?
     var richText: Data?; var documentMode: DocumentEditingMode = .markdown
     var folderID: UUID?; var taskID: UUID?
     var color = "none"; var pinned = false; var folded = false
@@ -91,6 +92,11 @@ enum SideNotesLibrary {
             }
             reload(); return true
         } catch { self.error = error.localizedDescription; return false }
+    }
+    @discardableResult func permanentlyDeleteSideNote(_ id: UUID) -> Bool {
+        guard let note = sideNotes.first(where: { $0.id == id && $0.deleted }) else { return false }
+        do { try persistence.purgeSideNote(note); reload(); return true }
+        catch { self.error = error.localizedDescription; return false }
     }
     func validNoteFolder(_ id: UUID?) -> UUID? { noteFolders.contains { $0.id == id && !$0.deleted } ? id : nil }
 }

@@ -315,6 +315,7 @@ struct SideNotesView: View {
     @ObservedObject var selection: SideNotesSelection
     @State private var search = ""
     @State private var trash = false
+    @State private var deletingNote: UUID?
     @State private var contentWidth: CGFloat = 320
     private var notes: [SideNote] { SideNotesLibrary.visible(store.sideNotes,tasks: store.tasks,search: search,trash: trash) }
     var body: some View {
@@ -322,6 +323,16 @@ struct SideNotesView: View {
             ScrollViewReader { reader in
                 ScrollView {
                     VStack(spacing: 4) {
+                        if trash {
+                            Button(action: returnToNotes) {
+                                Label("返回便签",systemImage: "chevron.left")
+                                    .font(.system(size: 12,weight: .medium))
+                                    .frame(maxWidth: .infinity,alignment: .leading).padding(.horizontal,12).frame(height: 32)
+                                    .contentShape(RoundedRectangle(cornerRadius: 8))
+                            }.buttonStyle(.plain).foregroundStyle(ListTheme.accent)
+                                .background(ListTheme.adaptive(0xFFFFFF,0x292A2D),in: RoundedRectangle(cornerRadius: 8))
+                                .quietHover().accessibilityLabel("返回便签")
+                        }
                         if notes.isEmpty { emptyState }
                         ForEach(notes) { note in
                             PaperNoteCard(note: note,selection: selection,contentWidth: contentWidth) { noteActions(note) }
@@ -336,7 +347,11 @@ struct SideNotesView: View {
             Button("新建便签",systemImage: "square.and.pencil",action: createNote)
             Button(trash ? "返回便签" : "已删除便签",systemImage: "trash") { trash.toggle(); search = "" }
         }
-        .onChange(of: trash) { _,value in SideNotesPanel.shared.updateTitle(trash: value) }
+        .alert("永久删除便签？",isPresented: Binding(get: { deletingNote != nil },set: { if !$0 { deletingNote = nil } })) {
+            Button("取消",role: .cancel) { deletingNote = nil }
+            Button("永久删除",role: .destructive) { if let id = deletingNote { _ = store.permanentlyDeleteSideNote(id) }; deletingNote = nil }
+        } message: { Text("此操作无法撤销，关联任务会保留。") }
+        .onChange(of: trash) { _,value in selection.expanded = nil; SideNotesPanel.shared.updateTitle(trash: value) }
         .onPreferenceChange(NotesHeightKey.self) { heights in
             if let cards = heights["cards"] { SideNotesPanel.shared.fitContent(cards) }
         }
@@ -348,10 +363,16 @@ struct SideNotesView: View {
             Text(trash ? "没有已删除的便签" : search.isEmpty ? "随手记下一个想法" : "没有匹配的便签").font(.system(size: 12))
             if !trash && search.isEmpty { Button("新建便签",action: createNote).buttonStyle(.borderless) }
         }.foregroundStyle(ListTheme.secondary).frame(maxWidth: .infinity).frame(minHeight: 120)
+            .background(ListTheme.adaptive(0xFFFFFF,0x292A2D),in: RoundedRectangle(cornerRadius: 12))
     }
+    private func returnToNotes() { trash = false; search = ""; selection.expanded = nil }
     private func createNote() { trash = false; search = ""; selection.selected = store.createSideNote(); selection.expanded = selection.selected; selection.reveal = UUID() }
     @ViewBuilder private func noteActions(_ note: SideNote) -> some View {
-        if note.deleted { Button("恢复便签",systemImage: "arrow.uturn.backward") { store.updateSideNote(note.id) { $0.deleted = false } } }
+        if note.deleted {
+            Button("恢复便签",systemImage: "arrow.uturn.backward") { store.updateSideNote(note.id) { $0.deleted = false } }
+            Button("返回便签",systemImage: "chevron.left",action: returnToNotes)
+            Divider(); Button("永久删除",systemImage: "trash.slash",role: .destructive) { deletingNote = note.id }
+        }
         else {
             Button(note.pinned ? "取消置顶" : "置顶",systemImage: "pin") { store.updateSideNote(note.id) { $0.pinned.toggle() } }
             Menu("颜色") {

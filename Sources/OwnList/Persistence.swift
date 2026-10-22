@@ -86,11 +86,12 @@ final class Persistence {
             resolved[value.owner,default: []].insert(value.field)
             objects[value.owner, default: [:]][value.field] = decoded
         }
-        return try objects.values.map { try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys])) }
+        return try objects.values.filter { T.kind != SideNote.kind || $0["permanentlyDeleted"] as? Bool != true }.map { try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys])) }
     }
     func save<T: ListRecord>(_ record: T) throws {
         let encoded = try JSONEncoder().encode(record); let dict = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
         if !cacheLoaded { fieldCache.removeAll(); for v in try versions() { fieldCache[v.owner,default: [:]][v.field] = v.json }; cacheLoaded = true }; var previous = fieldCache[record.id] ?? [:]
+        if T.kind == SideNote.kind && previous["permanentlyDeleted"] == "true" { throw NSError(domain: "Zilo.SideNotes",code: 1,userInfo: [NSLocalizedDescriptionKey:ZiloLanguage.text("便签已永久删除，无法恢复。")]) }
         for key in Set(dict.keys).union(previous.keys) {
             var value = dict[key] ?? NSNull()
             if key == "richText", let encoded = value as? String, let data = Data(base64Encoded: encoded), data.count > 100_000 {
@@ -105,6 +106,19 @@ final class Persistence {
             o.setValue(UUID(), forKey: "id"); o.setValue(record.id, forKey: "owner"); o.setValue(T.kind, forKey: "kind"); o.setValue(key, forKey: "field"); o.setValue(json, forKey: "json"); o.setValue(Date(), forKey: "timestamp")
         }
         if !inTransaction { try container.viewContext.save() }; fieldCache[record.id] = previous
+    }
+    /// Remove document/history fields and leave only a content-free tombstone.
+    /// This prevents stale offline versions from making the note recoverable again.
+    func purgeSideNote(_ note: SideNote) throws {
+        guard note.deleted else { return }
+        try transaction {
+            let request = NSFetchRequest<NSManagedObject>(entityName: "FieldVersion")
+            request.predicate = NSPredicate(format: "owner == %@ AND kind == %@",note.id as CVarArg,SideNote.kind)
+            for object in try container.viewContext.fetch(request) { container.viewContext.delete(object) }
+            fieldCache.removeAll(); cacheLoaded = false
+            var marker = SideNote(); marker.id = note.id; marker.deleted = true; marker.permanentlyDeleted = true
+            try save(marker)
+        }
     }
     func ensureDefaultCountdowns(started: Date = Date()) throws {
         guard !inMemory, loadError == nil else { return }

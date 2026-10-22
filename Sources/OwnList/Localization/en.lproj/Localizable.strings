@@ -881,3 +881,11 @@
 "搜索已删除便签" = "Search deleted notes";
 
 "返回便签" = "Back to notes";
+
+"永久删除便签？" = "Permanently delete note?";
+
+"永久删除" = "Delete permanently";
+
+"此操作无法撤销，关联任务会保留。" = "This cannot be undone. The linked task will be kept.";
+
+"便签已永久删除，无法恢复。" = "This note was permanently deleted and cannot be restored.";

@@ -14,6 +14,7 @@ struct MobileSideNotesView: View {
     @State private var search = ""
     @State private var trash = false
     @State private var selected: MobileSideNoteSelection?
+    @State private var deletingNote: UUID?
     @State private var exportFile: MobileHTMLFile?
     private var notes: [SideNote] { SideNotesLibrary.visible(store.sideNotes,tasks: store.tasks,search: search,trash: trash) }
     var body: some View {
@@ -34,7 +35,10 @@ struct MobileSideNotesView: View {
                             if note.taskID != nil { badge(ZiloLanguage.text("关联任务"),symbol: "link") }
                         }.padding(17).frame(maxWidth: .infinity,alignment: .leading).background(SideNotePaper(stored: note.color).color(dark: scheme == .dark),in: RoundedRectangle(cornerRadius: 16))
                     }.buttonStyle(.plain).contextMenu {
-                        if note.deleted { Button("恢复便签",systemImage: "arrow.uturn.backward") { store.updateSideNote(note.id) { $0.deleted = false } } }
+                        if note.deleted {
+                            Button("恢复便签",systemImage: "arrow.uturn.backward") { store.updateSideNote(note.id) { $0.deleted = false } }
+                            Button("永久删除",systemImage: "trash.slash",role: .destructive) { deletingNote = note.id }
+                        }
                         else {
                             Button(note.pinned ? "取消置顶" : "置顶",systemImage: "pin") { store.updateSideNote(note.id) { $0.pinned.toggle() } }
                             Button(note.folded ? "展开便签" : "折叠便签",systemImage: "rectangle.compress.vertical") { store.updateSideNote(note.id) { $0.folded.toggle() } }
@@ -58,6 +62,10 @@ struct MobileSideNotesView: View {
                     ToolbarItem(placement: .topBarTrailing) { Button { if let id = store.createSideNote() { search = ""; selected = MobileSideNoteSelection(id: id) } } label: { Image(systemName: "square.and.pencil") }.accessibilityLabel("新建便签") }
                 }
             }
+            .alert("永久删除便签？",isPresented: Binding(get: { deletingNote != nil },set: { if !$0 { deletingNote = nil } })) {
+                Button("取消",role: .cancel) { deletingNote = nil }
+                Button("永久删除",role: .destructive) { if let id = deletingNote { _ = store.permanentlyDeleteSideNote(id) }; deletingNote = nil }
+            } message: { Text("此操作无法撤销，关联任务会保留。") }
             .sheet(item: $selected) { selection in NavigationStack { MobileSideNoteEditor(noteID: selection.id) } }
             .sheet(item: $exportFile) { MobileShare(items: [$0.url]) }
     }
@@ -74,6 +82,7 @@ struct MobileSideNoteEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var preview = false
     @State private var height: CGFloat = 200
+    @State private var deleting = false
     @State private var exported: MobileHTMLFile?
     private var note: SideNote? { store.sideNotes.first { $0.id == noteID } }
     private var document: TaskItem? { note?.document(tasks: store.tasks) }
@@ -100,7 +109,10 @@ struct MobileSideNoteEditor: View {
             ToolbarItem(placement: .cancellationAction) { Button("完成") { dismiss() } }
             ToolbarItem(placement: .topBarTrailing) { Menu {
                 if let note {
-                    if note.deleted { Button("恢复便签") { store.updateSideNote(noteID) { $0.deleted = false } } }
+                    if note.deleted {
+                        Button("恢复便签") { store.updateSideNote(noteID) { $0.deleted = false } }
+                        Button("永久删除",systemImage: "trash.slash",role: .destructive) { deleting = true }
+                    }
                     else {
                         Button(note.pinned ? "取消置顶" : "置顶",systemImage: "pin") { store.updateSideNote(noteID) { $0.pinned.toggle() } }
                         MobileNoteColorMenu(current: note.color) { color in store.updateSideNote(noteID) { $0.color = color } }
@@ -109,7 +121,11 @@ struct MobileSideNoteEditor: View {
                     }
                 }
             } label: { Image(systemName: "ellipsis") } }
-        }.sheet(item: $exported) { MobileShare(items: [$0.url]) }
+        }.alert("永久删除便签？",isPresented: $deleting) {
+            Button("取消",role: .cancel) {}
+            Button("永久删除",role: .destructive) { if store.permanentlyDeleteSideNote(noteID) { dismiss() } }
+        } message: { Text("此操作无法撤销，关联任务会保留。") }
+        .sheet(item: $exported) { MobileShare(items: [$0.url]) }
     }
 }
 private struct MobileNoteColorMenu: View {

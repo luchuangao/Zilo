@@ -107,6 +107,27 @@ final class HTMLAndSideNotesTests: XCTestCase {
         XCTAssertEqual(try persistence.load(SideNote.self).count,2)
         XCTAssertEqual(store.sideNotes.first { $0.id == standalone }?.text,"独立便签")
     }
+    @MainActor func testPermanentNoteDeletionRemovesContentAndHistoryWithoutDeletingLinkedTask() throws {
+        let persistence = Persistence(inMemory: true); let store = Store(persistence: persistence)
+        var task = TaskItem(); task.title = "Keep task"; task.notes = "Keep task body"; XCTAssertTrue(store.save(task))
+        let linked = try XCTUnwrap(store.linkSideNote(taskID: task.id))
+        XCTAssertFalse(store.permanentlyDeleteSideNote(linked),"Active notes must go to trash first")
+        store.updateSideNote(linked) { $0.deleted = true }
+        let stale = try XCTUnwrap(store.sideNotes.first { $0.id == linked })
+        XCTAssertTrue(store.permanentlyDeleteSideNote(linked))
+        store.reload()
+        XCTAssertFalse(store.sideNotes.contains { $0.id == linked })
+        XCTAssertEqual(store.tasks.first { $0.id == task.id },task)
+        XCTAssertThrowsError(try persistence.save(stale),"Offline/stale edits cannot restore purged notes")
+        let id = try XCTUnwrap(store.createSideNote(text: "private body"))
+        store.updateSideNote(id) { $0.title = "private title"; $0.deleted = true }
+        XCTAssertTrue(store.permanentlyDeleteSideNote(id))
+        let history = try persistence.versions().filter { $0.owner == id }
+        XCTAssertFalse(history.contains { $0.json.contains("private") })
+        XCTAssertTrue(history.contains { $0.field == "permanentlyDeleted" && $0.json == "true" })
+        XCTAssertFalse(try persistence.load(SideNote.self).contains { $0.id == id })
+        XCTAssertFalse(store.permanentlyDeleteSideNote(id))
+    }
     @MainActor func testNoteFoldersSearchPinningAndDeletionKeepNotesRecoverable() throws {
         let store = Store(persistence: Persistence(inMemory: true))
         let folder = try XCTUnwrap(store.createNoteFolder(" 工作 "))
