@@ -12,11 +12,12 @@ extension Store: SideNotesStore {
 @MainActor final class SideNotesSelection: ObservableObject {
     @Published var selected: UUID?
     @Published var reveal = UUID()
+    @Published var expanded: UUID?
 }
 enum SideNotesDockLayout {
     static func frame(screen: NSRect,width: CGFloat = 320,contentHeight: CGFloat) -> NSRect {
         let width = min(max(280,width),min(480,screen.width))
-        let height = min(max(240,contentHeight),max(240,screen.height-32))
+        let height = min(max(100,contentHeight),max(100,screen.height-32))
         return NSRect(x: screen.maxX-width,y: screen.maxY-16-height,width: width,height: height)
     }
 }
@@ -36,7 +37,7 @@ struct SideNotesFoldResize {
 }
 
 /// Debounce edge visits and protect editing/menu interactions from auto-hide.
-@MainActor final class SideNotesHoverBehavior {
+@MainActor final class SideNotesHoverBehavior: ObservableObject {
     var containsPointer: () -> Bool = { false }
     var canHide: () -> Bool = { true }
     var onShow: () -> Void = {}
@@ -63,11 +64,21 @@ struct SideNotesFoldResize {
         closeTask = Task { [weak self] in
             guard let delay = self?.closeDelay else { return }
             try? await Task.sleep(nanoseconds: delay)
-            guard !Task.isCancelled,let self,!self.containsPointer(),self.canHide() else { return }
-            self.onHide()
+            guard !Task.isCancelled,let self else { return }
+            // Leaving during editing or menu tracking must not lose the pending
+            // close. Retry after protection ends without requiring another exit.
+            while !Task.isCancelled && !self.containsPointer() {
+                if self.canHide() { self.onHide(); return }
+                do { try await Task.sleep(nanoseconds: 150_000_000) } catch { return }
+            }
         }
     }
     func cancel() { openTask?.cancel(); closeTask?.cancel(); openTask = nil; closeTask = nil }
+}
+
+private final class FloatingNotesWindow: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 }
 
 @MainActor final class SideNotesPanel: NSObject, NSWindowDelegate {
@@ -93,7 +104,7 @@ struct SideNotesFoldResize {
         hover.canHide = { [weak self] in
             guard let self else { return false }
             let editing = self.panel?.isKeyWindow == true && self.panel?.firstResponder is NSTextView
-            return !editing && self.menuDepth == 0
+            return !editing && self.menuDepth == 0 && self.panel?.inLiveResize != true && NSApp.modalWindow == nil
         }
         hover.onShow = { [weak self] in
             guard let self,!self.presented,let store = self.store else { return }
@@ -115,6 +126,10 @@ struct SideNotesFoldResize {
         // The drawer starts tucked away; only its thin edge handle is visible.
         updateEdge()
     }
+    var protectsNoteInteraction: Bool {
+        menuDepth > 0 || NSApp.modalWindow != nil || panel?.inLiveResize == true
+            || (panel?.isKeyWindow == true && panel?.firstResponder is NSTextView)
+    }
     private var chromeHeight: CGFloat {
         guard let panel else { return 28 }
         return panel.frame.height-panel.contentRect(forFrameRect: panel.frame).height
@@ -130,12 +145,13 @@ struct SideNotesFoldResize {
     func show(_ store: Store,taskID: UUID? = nil,activate: Bool = true) {
         self.store = store
         hover.cancel(); cancelFoldResize(); hoverPreview = !activate; pointerVisitedPanel = containsPointer
-        if let taskID { selection.selected = store.linkSideNote(taskID: taskID); selection.reveal = UUID() }
+        if let taskID { selection.selected = store.linkSideNote(taskID: taskID); selection.expanded = selection.selected; selection.reveal = UUID() }
         if panel == nil {
-            let window = NSPanel(contentRect: SideNotesDockLayout.frame(screen: screen,contentHeight: measuredHeight),styleMask: [.titled,.closable,.resizable,.nonactivatingPanel],backing: .buffered,defer: false)
+            let window = FloatingNotesWindow(contentRect: SideNotesDockLayout.frame(screen: screen,contentHeight: measuredHeight),styleMask: [.borderless,.resizable,.nonactivatingPanel],backing: .buffered,defer: false)
             window.title = ZiloLanguage.text("便签"); window.isReleasedWhenClosed = false
+            window.backgroundColor = .clear; window.isOpaque = false; window.hasShadow = false
             window.becomesKeyOnlyIfNeeded = true; window.delegate = self
-            window.minSize = NSSize(width: 280,height: 240); window.maxSize = NSSize(width: 480,height: screen.height)
+            window.minSize = NSSize(width: 280,height: 100); window.maxSize = NSSize(width: 480,height: screen.height)
             window.level = .floating; window.collectionBehavior = [.canJoinAllSpaces,.fullScreenAuxiliary]; window.hidesOnDeactivate = false
             let host = NotesHostingView(rootView: SideNotesView(selection: selection).environmentObject(store).environment(\.locale,ZiloLanguage.locale).themeAppearance())
             host.onHide = { [weak self] in self?.hide() }
@@ -166,7 +182,7 @@ struct SideNotesFoldResize {
     func hide() {
         hover.cancel(); cancelFoldResize()
         guard let panel else { return }
-        presented = false; let token = UUID(); animation = token
+        presented = false; selection.expanded = nil; let token = UUID(); animation = token
         if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { panel.orderOut(nil); return }
         var target = panel.frame; target.origin.x = screen.maxX+8
         NSAnimationContext.runAnimationGroup { context in context.duration = 0.16; panel.animator().setFrame(target,display: true) } completionHandler: { [weak self] in
@@ -299,54 +315,32 @@ struct SideNotesView: View {
     @ObservedObject var selection: SideNotesSelection
     @State private var search = ""
     @State private var trash = false
-    @State private var trashHover = false
-    @State private var previews = Set<UUID>()
     @State private var contentWidth: CGFloat = 320
     private var notes: [SideNote] { SideNotesLibrary.visible(store.sideNotes,tasks: store.tasks,search: search,trash: trash) }
     var body: some View {
         VStack(spacing: 0) {
-            header.notesHeight("header")
             ScrollViewReader { reader in
                 ScrollView {
-                    VStack(spacing: 10) {
+                    VStack(spacing: 4) {
                         if notes.isEmpty { emptyState }
                         ForEach(notes) { note in
-                            PaperNoteCard(note: note,selection: selection,contentWidth: contentWidth,
-                                          preview: Binding(get: { previews.contains(note.id) },set: { if $0 { previews.insert(note.id) } else { previews.remove(note.id) } })) { noteActions(note) }
+                            PaperNoteCard(note: note,selection: selection,contentWidth: contentWidth) { noteActions(note) }
                                 .id(note.id)
                         }
-                    }.padding(12).frame(maxWidth: .infinity).fixedSize(horizontal: false,vertical: true).notesHeight("cards")
+                    }.padding(8).frame(maxWidth: .infinity).fixedSize(horizontal: false,vertical: true).notesHeight("cards")
                 }.onAppear { reveal(reader) }.onChange(of: selection.reveal) { _,_ in reveal(reader) }
             }
         }
-        .background(ListTheme.adaptive(0xFFFFFF,0x212225)).foregroundStyle(ListTheme.text)
+        .background(Color.clear).foregroundStyle(ListTheme.text)
+        .contextMenu {
+            Button("新建便签",systemImage: "square.and.pencil",action: createNote)
+            Button(trash ? "返回便签" : "已删除便签",systemImage: "trash") { trash.toggle(); search = "" }
+        }
         .onChange(of: trash) { _,value in SideNotesPanel.shared.updateTitle(trash: value) }
         .onPreferenceChange(NotesHeightKey.self) { heights in
-            if let header = heights["header"],let cards = heights["cards"] { SideNotesPanel.shared.fitContent(header+cards) }
+            if let cards = heights["cards"] { SideNotesPanel.shared.fitContent(cards) }
         }
         .background { GeometryReader { geometry in Color.clear.onAppear { contentWidth = geometry.size.width }.onChange(of: geometry.size.width) { _,width in contentWidth = width } } }
-    }
-    private var header: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass").font(.system(size: 12))
-                TextField(trash ? "搜索已删除便签" : "搜索便签",text: $search).textFieldStyle(.plain).foregroundStyle(ListTheme.text).accessibilityLabel("搜索便签")
-                if !search.isEmpty { Button { search = "" } label: { Image(systemName: "xmark.circle.fill") }.buttonStyle(.plain).accessibilityLabel("清除搜索") }
-            }.font(.system(size: 12)).foregroundStyle(ListTheme.secondary).padding(.horizontal,10).frame(height: 32)
-                .background(ListTheme.adaptive(0xF3F4F6,0x2C2D31),in: RoundedRectangle(cornerRadius: 8))
-            Button(action: createNote) { Image(systemName: "square.and.pencil").font(.system(size: 15)).frame(width: 28,height: 32).contentShape(Rectangle()) }
-                .buttonStyle(.plain).quietHover().help("新建便签").accessibilityLabel("新建便签")
-            Button { trash.toggle(); search = "" } label: {
-                Image(systemName: "trash").font(.system(size: 13,weight: .regular))
-                    .foregroundStyle(trash ? ListTheme.accent : ListTheme.secondary).frame(width: 32,height: 32)
-                    .background(trash ? ListTheme.accent.opacity(trashHover ? 0.16 : 0.1) : ListTheme.adaptive(trashHover ? 0xE9EBEF : 0xF3F4F6,trashHover ? 0x373940 : 0x2C2D31),in: RoundedRectangle(cornerRadius: 10))
-                    .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(trash ? ListTheme.accent.opacity(0.12) : ListTheme.text.opacity(0.04),lineWidth: 0.5) }
-                    .contentShape(RoundedRectangle(cornerRadius: 10))
-            }.buttonStyle(.plain).onHover { trashHover = $0 }
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.12),value: trashHover)
-                .help(trash ? "返回便签" : "已删除便签").accessibilityLabel(trash ? "返回便签" : "已删除便签")
-                .accessibilityAddTraits(trash ? .isSelected : [])
-        }.padding(.horizontal,14).padding(.top,12).padding(.bottom,2)
     }
     private var emptyState: some View {
         VStack(spacing: 10) {
@@ -355,7 +349,7 @@ struct SideNotesView: View {
             if !trash && search.isEmpty { Button("新建便签",action: createNote).buttonStyle(.borderless) }
         }.foregroundStyle(ListTheme.secondary).frame(maxWidth: .infinity).frame(minHeight: 120)
     }
-    private func createNote() { trash = false; search = ""; selection.selected = store.createSideNote(); selection.reveal = UUID() }
+    private func createNote() { trash = false; search = ""; selection.selected = store.createSideNote(); selection.expanded = selection.selected; selection.reveal = UUID() }
     @ViewBuilder private func noteActions(_ note: SideNote) -> some View {
         if note.deleted { Button("恢复便签",systemImage: "arrow.uturn.backward") { store.updateSideNote(note.id) { $0.deleted = false } } }
         else {
@@ -372,12 +366,14 @@ struct SideNotesView: View {
                 Button("HTML 网页（.html）",systemImage: "square.and.arrow.up") { export(task) }
             }
             if let id = note.taskID { Button("打开关联任务",systemImage: "arrow.up.forward") { store.notificationTask = id; NSApp.activate(ignoringOtherApps: true) } }
+            Divider(); Button("新建便签",systemImage: "square.and.pencil",action: createNote)
+            Button("已删除便签",systemImage: "trash") { trash = true }
             Divider(); Button("删除便签",systemImage: "trash",role: .destructive) { store.updateSideNote(note.id) { $0.deleted = true } }
         }
     }
     private func reveal(_ reader: ScrollViewProxy) {
-        guard let id = selection.selected,let note = store.sideNotes.first(where: { $0.id == id }) else { return }
-        trash = false; SideNotesPanel.shared.updateTitle(trash: false); search = ""; store.updateSideNote(id) { $0.folded = false }
+        guard let id = selection.selected,store.sideNotes.contains(where: { $0.id == id }) else { return }
+        trash = false; SideNotesPanel.shared.updateTitle(trash: false); search = ""
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { reader.scrollTo(id,anchor: .top) }
     }
     private func export(_ task: TaskItem) {
@@ -393,7 +389,11 @@ private struct PaperNoteCard<Actions: View>: View {
     var note: SideNote
     @ObservedObject var selection: SideNotesSelection
     var contentWidth: CGFloat
-    @Binding var preview: Bool
+    @State private var preview = false
+    // Hover is presentation state: it never writes a note or changes its
+    // modification date. Every drawer session starts with folded cards.
+    private var folded: Bool { selection.expanded != note.id }
+    @StateObject private var hover = SideNotesHoverBehavior(openDelay: 120_000_000,closeDelay: 320_000_000)
     @ViewBuilder var actions: () -> Actions
     @State private var hovering = false
     private var document: TaskItem? { note.document(tasks: store.tasks) }
@@ -407,10 +407,10 @@ private struct PaperNoteCard<Actions: View>: View {
     var body: some View {
         VStack(alignment: .leading,spacing: 8) {
             titleRow
-            if !note.folded {
+            if !folded {
                 if let document {
-                    if note.taskID != nil || (!note.deleted && document.editingMode == .markdown) { tools(document) }
                     bodyContent(document).transition(.opacity)
+                    if note.taskID != nil || (!note.deleted && document.editingMode == .markdown) { tools(document) }
                 } else { Text("关联任务暂不可用，请同步后重试。").font(.caption).foregroundStyle(ListTheme.secondary).frame(height: 28,alignment: .topLeading) }
             }
         }.padding(12).frame(maxWidth: .infinity,alignment: .leading)
@@ -420,7 +420,14 @@ private struct PaperNoteCard<Actions: View>: View {
             .shadow(color: .black.opacity(dark ? (hovering ? 0.15 : 0.08) : (hovering ? 0.065 : 0.025)),radius: hovering ? 7 : 3,x: 0,y: 2)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12),value: hovering)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2),value: note.color)
-            .onHover { hovering = $0 }
+            .onChange(of: folded) { _,value in animateFoldResize(value) }
+            .onChange(of: selection.reveal) { _,_ in if selected { selectAndExpand() } }
+            .onDisappear {
+                hover.cancel(); hover.onShow = {}; hover.onHide = {}; hover.containsPointer = { false }; hover.canHide = { true }
+            }
+            .background {
+                NotePointerTracking(onChange: trackPointer)
+            }
             .contentShape(RoundedRectangle(cornerRadius: 12))
             .onTapGesture { selectAndExpand() }
             .onDrop(of: [UTType.text,UTType.url],isTargeted: nil) { providers in
@@ -433,13 +440,13 @@ private struct PaperNoteCard<Actions: View>: View {
     private var titleRow: some View {
         HStack(spacing: 4) {
             Button {
-                setFolded(!note.folded)
+                hover.cancel(); setFolded(!folded)
             } label: {
                 Image(systemName: "chevron.right").font(.system(size: 10,weight: .semibold))
-                    .rotationEffect(.degrees(note.folded ? 0 : 90)).animation(reduceMotion ? nil : .easeInOut(duration: 0.22),value: note.folded)
+                    .rotationEffect(.degrees(folded ? 0 : 90)).animation(reduceMotion ? nil : .easeInOut(duration: 0.22),value: folded)
                     .foregroundStyle(ListTheme.secondary).frame(width: 28,height: 28).contentShape(Rectangle())
-            }.buttonStyle(.plain).quietHover().accessibilityLabel(note.folded ? "展开便签" : "折叠便签")
-            if note.folded {
+            }.buttonStyle(.plain).quietHover().accessibilityLabel(folded ? "展开便签" : "折叠便签")
+            if folded {
                 Button(action: selectAndExpand) {
                     Text(displayTitle)
                         .font(.system(size: 14,weight: .semibold)).foregroundStyle(ListTheme.text)
@@ -475,28 +482,39 @@ private struct PaperNoteCard<Actions: View>: View {
             MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,paperBackground: paper.hex(dark: dark),compact: true).frame(height: max(64,editorHeight(task.notes)))
         } else {
             TextEditor(text: Binding(get: { document?.notes ?? "" },set: { store.updateSideNoteDocument(note.id,text: $0) }))
-                .font(.system(size: 13)).scrollContentBackground(.hidden).frame(height: editorHeight(task.notes)).accessibilityLabel("便签内容")
+                .font(.system(size: 13)).scrollContentBackground(.hidden).frame(height: max(64,editorHeight(task.notes))).accessibilityLabel("便签内容")
         }
     }
     private func selectAndExpand() {
-        selection.selected = note.id
-        if note.folded { setFolded(false) }
+        if selection.selected != note.id { selection.selected = note.id }
+        if folded { setFolded(false) }
     }
     private func bodyHeight(_ task: TaskItem) -> CGFloat {
         if note.deleted { let text = TaskDocument.summary(task); return text.isEmpty ? 0 : editorHeight(text) }
-        return preview && task.editingMode == .markdown ? max(64,editorHeight(task.notes)) : editorHeight(task.notes)
+        return task.editingMode == .markdown ? max(64,editorHeight(task.notes)) : editorHeight(task.notes)
+    }
+    private func trackPointer(_ inside: Bool) {
+        hovering = inside
+        hover.containsPointer = { hovering }
+        hover.canHide = { !SideNotesPanel.shared.protectsNoteInteraction }
+        hover.onShow = { setFolded(false) }
+        hover.onHide = { setFolded(true) }
+        if inside { hover.enterEdge() } else { hover.leave() }
     }
     private func setFolded(_ folded: Bool) {
-        guard let current = store.sideNotes.first(where: { $0.id == note.id }),current.folded != folded else { return }
+        guard self.folded != folded else { return }
+        if !folded { selection.selected = note.id }
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+            selection.expanded = folded ? nil : note.id
+        }
+    }
+    private func animateFoldResize(_ folded: Bool) {
         let expansion: CGFloat
         if let task = document {
             let toolbar: CGFloat = note.taskID != nil || (!note.deleted && task.editingMode == .markdown) ? 32 : 0
             expansion = 8 + toolbar + bodyHeight(task)
         } else { expansion = 36 }
         if !reduceMotion { SideNotesPanel.shared.animateFoldResize(by: folded ? -expansion : expansion) }
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
-            store.updateSideNote(note.id) { $0.folded = folded }
-        }
     }
     private func editorHeight(_ text: String) -> CGFloat {
         let bounds = (text as NSString).boundingRect(with: NSSize(width: max(180,contentWidth-58),height: 10000),options: [.usesLineFragmentOrigin,.usesFontLeading],attributes: [.font:NSFont.systemFont(ofSize: 13)])
@@ -508,4 +526,23 @@ private struct PaperNoteCard<Actions: View>: View {
             store.updateSideNoteDocument(note.id,text: old + (old.isEmpty ? "" : "\n") + text)
         }
     }
+}
+
+private struct NotePointerTracking: NSViewRepresentable {
+    var onChange: (Bool) -> Void
+    func makeNSView(context: Context) -> NotePointerView { let view = NotePointerView(); view.changed = onChange; return view }
+    func updateNSView(_ view: NotePointerView,context: Context) { view.changed = onChange }
+}
+private final class NotePointerView: NSView {
+    var changed: (Bool) -> Void = { _ in }
+    private var area: NSTrackingArea?
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let area { removeTrackingArea(area) }
+        let next = NSTrackingArea(rect: .zero,options: [.activeAlways,.mouseEnteredAndExited,.inVisibleRect],owner: self,userInfo: nil)
+        addTrackingArea(next); area = next
+    }
+    override func mouseEntered(with event: NSEvent) { changed(true) }
+    override func mouseExited(with event: NSEvent) { changed(false) }
 }

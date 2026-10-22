@@ -203,7 +203,8 @@ final class HTMLAndSideNotesTests: XCTestCase {
         editing = false; menu = true
         hover.leave(); try await Task.sleep(nanoseconds: 60_000_000); XCTAssertEqual(hides,0)
         menu = false
-        hover.leave(); try await Task.sleep(nanoseconds: 60_000_000); XCTAssertEqual(hides,1)
+        try await Task.sleep(nanoseconds: 220_000_000); XCTAssertEqual(hides,1)
+        hover.cancel()
     }
     private func imagePNG() throws -> Data {
         let image = NSImage(size: NSSize(width: 4,height: 4)); image.lockFocus(); NSColor.systemBlue.setFill(); NSBezierPath(rect: NSRect(x: 0,y: 0,width: 4,height: 4)).fill(); image.unlockFocus()

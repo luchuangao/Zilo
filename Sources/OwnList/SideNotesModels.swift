@@ -115,25 +115,25 @@ enum SideNotePaper: String, CaseIterable, Identifiable {
     func hex(dark: Bool) -> UInt32 {
         switch self {
         case .none: return dark ? 0x292A2D : 0xFFFFFF
-        case .yellow: return dark ? 0x383326 : 0xFFF5D8
-        case .blue: return dark ? 0x283340 : 0xEAF2FC
-        case .green: return dark ? 0x2C372E : 0xEDF3E7
-        case .purple: return dark ? 0x332E40 : 0xF1ECFA
-        case .pink: return dark ? 0x3D2D34 : 0xFBECEF
-        case .orange: return dark ? 0x403125 : 0xFFF0E3
-        case .teal: return dark ? 0x253A38 : 0xE6F4F0
+        case .yellow: return dark ? 0x494020 : 0xFFF2C9
+        case .blue: return dark ? 0x253E58 : 0xDFEEFF
+        case .green: return dark ? 0x30472A : 0xE0F2CE
+        case .purple: return dark ? 0x443159 : 0xEDE0FF
+        case .pink: return dark ? 0x562E43 : 0xFFE0EB
+        case .orange: return dark ? 0x54391F : 0xFFE8CE
+        case .teal: return dark ? 0x234B45 : 0xD4F3EC
         }
     }
     var swatchHex: UInt32 {
         switch self {
         case .none: return 0xFFFFFF
-        case .yellow: return 0xE8C56D
-        case .blue: return 0x91B4DD
-        case .green: return 0xA7BD94
-        case .purple: return 0xB9A6D7
-        case .pink: return 0xDDA6B3
-        case .orange: return 0xE8B087
-        case .teal: return 0x8BBFB4
+        case .yellow: return 0xF5BF35
+        case .blue: return 0x62AEF5
+        case .green: return 0x7CCB52
+        case .purple: return 0xAD7DEB
+        case .pink: return 0xF184B2
+        case .orange: return 0xF3A04E
+        case .teal: return 0x42C9B0
         }
     }
     func color(dark: Bool) -> Color { Self.color(hex(dark: dark)) }
