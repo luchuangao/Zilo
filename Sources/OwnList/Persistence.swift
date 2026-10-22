@@ -72,13 +72,18 @@ final class Persistence {
     }
     func load<T: ListRecord>(_ type: T.Type) throws -> [T] {
         let values = try versions(kind: T.kind); var objects: [UUID: [String: Any]] = [:]
-        for value in values {
+        // Resolve newest fields first. Historical versions remain available for
+        // activity/restore, but their large document bodies need not be decoded.
+        var resolved: [UUID: Set<String>] = [:]
+        for value in values.reversed() {
+            guard resolved[value.owner]?.contains(value.field) != true else { continue }
             var decoded = try JSONSerialization.jsonObject(with: Data(value.json.utf8), options: [.fragmentsAllowed])
             if value.field == "richText", let marker = decoded as? [String: String], let path = marker["documentBlob"] {
                 let request = NSFetchRequest<NSManagedObject>(entityName: "AttachmentBlob"); request.predicate = NSPredicate(format: "path == %@",path); request.fetchLimit = 1
                 guard let data = try container.viewContext.fetch(request).first?.value(forKey: "data") as? Data else { onCloudEvent?("正文图片正在下载…"); continue }
                 decoded = data.base64EncodedString()
             }
+            resolved[value.owner,default: []].insert(value.field)
             objects[value.owner, default: [:]][value.field] = decoded
         }
         return try objects.values.map { try JSONDecoder().decode(T.self, from: JSONSerialization.data(withJSONObject: $0, options: [.sortedKeys])) }

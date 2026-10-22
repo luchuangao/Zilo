@@ -804,6 +804,54 @@ final class OwnListTests: XCTestCase {
     func testLunarNewYear() { var r = RepeatRule(); r.frequency = "lunar"; r.lunarMonth = 1; r.lunarDay = 1; XCTAssertEqual(r.next(after: date(2026,1,1),calendar: calendar),date(2026,2,17)) }
     func testCSVQuotedNewlines() { XCTAssertEqual(CSV.parse("Title,Content\r\n\"a,b\",\"line1\nline2 \"\"quote\"\"\"\r\n"),[["Title","Content"],["a,b","line1\nline2 \"quote\""]]) }
     func testICSUTCAndUnfolding() throws { let data = Data("BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:one\r\nDTSTART:20261006T010000Z\r\nDTEND:20261006T020000Z\r\nSUMMARY:Long\r\n  title\r\nEND:VEVENT\r\nEND:VCALENDAR".utf8); let result = try ICSParser.parse(data,source: "test"); XCTAssertEqual(result.count,1); XCTAssertEqual(result[0].title,"Long title"); XCTAssertEqual(result[0].start,date(2026,10,6)); XCTAssertEqual(result[0].end.timeIntervalSince(result[0].start),3600) }
+    func testHistoryHeavyLoadPreservesLatestFieldsAndRestore() throws {
+        let p = Persistence(inMemory: true)
+        defer { try? FileManager.default.removeItem(at: p.root) }
+        var task = TaskItem(); task.title = "History benchmark"
+        let body = String(repeating: "history document line\n",count: 5000)
+        try p.transaction {
+            for revision in 0..<60 { task.notes = body + String(revision); try p.save(task) }
+        }
+        let start = Date()
+        let loaded = try XCTUnwrap(p.load(TaskItem.self).first)
+        let optimized = Date().timeIntervalSince(start)
+        let legacyStart = Date()
+        let versions = try p.versions(kind: TaskItem.kind)
+        var fields: [String: Any] = [:]
+        for v in versions { fields[v.field] = try JSONSerialization.jsonObject(with: Data(v.json.utf8),options: [.fragmentsAllowed]) }
+        let legacy = Date().timeIntervalSince(legacyStart)
+        XCTAssertEqual(loaded.notes,fields["notes"] as? String)
+        XCTAssertEqual(versions.filter { $0.field == "notes" }.count,60)
+        let first = try XCTUnwrap(versions.first { $0.field == "notes" })
+        try p.restoreField(first)
+        XCTAssertEqual(try p.load(TaskItem.self).first?.notes,body + "0")
+        print("History-heavy load: current=\(optimized)s legacy=\(legacy)s")
+    }
+    func testMissingLatestDocumentBlobKeepsPreviousTextUntilDownload() throws {
+        let p = Persistence(inMemory: true)
+        defer { try? FileManager.default.removeItem(at: p.root) }
+        var task = TaskItem(); task.richText = Data("previous document".utf8); try p.save(task)
+        let marker = FieldVersion(id: UUID(),owner: task.id,kind: TaskItem.kind,field: "richText",json: "{\"documentBlob\":\"Documents/pending.rtfd\"}",timestamp: Date())
+        try p.restoreField(marker)
+        XCTAssertEqual(try p.load(TaskItem.self).first?.richText,task.richText)
+        let downloaded = Data("downloaded document".utf8)
+        try p.saveBlob(path: "Documents/pending.rtfd",data: downloaded)
+        XCTAssertEqual(try p.load(TaskItem.self).first?.richText,downloaded)
+        task.richText = nil; try p.save(task)
+        XCTAssertNil(try p.load(TaskItem.self).first?.richText)
+    }
+    func testPreviewReuseDoesNotMixDocumentsOrExportMarkup() {
+        let renderer = MarkdownRenderer.shared
+        let source = "# Cached preview\n```swift\nlet answer = 42\n```"
+        let first = renderer.render(source)
+        _ = renderer.render("# Different document")
+        let again = renderer.render(source)
+        XCTAssertEqual(first.html,again.html); XCTAssertEqual(first.codes,again.codes)
+        XCTAssertFalse(again.html.contains("Different document"))
+        XCTAssertEqual(renderer.render(source,forExport: true).codes,first.codes)
+        for index in 0..<12 { _ = renderer.render("# Eviction \(index)") }
+        XCTAssertEqual(renderer.render(source).html,first.html)
+    }
     func testPersistenceRoundtripOptionalClearingAndHistory() throws { let p = Persistence(inMemory: true); var t = TaskItem(); t.title = "持久化"; t.due = date(2026,10,6); t.tags = ["学习"]; t.checks = [CheckItem(title: "检查")]; try p.save(t); t.due = nil; t.title = "已修改"; try p.save(t); let loaded = try XCTUnwrap(p.load(TaskItem.self).first); XCTAssertNil(loaded.due); XCTAssertEqual(loaded.title,"已修改"); XCTAssertEqual(loaded.checks.count,1); let versions = try p.versions(owner: t.id); XCTAssertEqual(versions.filter { $0.field == "title" }.count,2); try p.restoreField(versions.first { $0.field == "title" }!); XCTAssertEqual(try p.load(TaskItem.self).first?.title,"持久化") }
     func testImportAndStableDeduplication() throws { let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".csv"); defer { try? FileManager.default.removeItem(at: url) }; try "Title,List Name,Due Date,Tags,Status\n任务,工作,2026-10-06,标签,1\n".write(to: url,atomically: true,encoding: .utf8); let first = try ImportService.preview(url); let second = try ImportService.preview(url); XCTAssertEqual(first.count,1); XCTAssertTrue(first.backup.tasks[0].completed); XCTAssertEqual(first.backup.tasks[0].sourceID,second.backup.tasks[0].sourceID); XCTAssertEqual(first.backup.lists[0].name,"工作") }
     func testTenThousandTaskFiltering() { let tasks = (0..<10000).map { i in var t = TaskItem(); t.title = "任务 \(i)"; t.tags = i % 2 == 0 ? ["工作"] : ["学习"]; t.priority = i % 4; return t }; var f = SavedFilter(name: "工作高优先级"); f.tag = "工作"; f.priority = 2; measure { XCTAssertEqual(tasks.filter { f.matches($0) }.count,2500) } }

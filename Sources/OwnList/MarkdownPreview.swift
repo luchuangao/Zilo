@@ -12,6 +12,11 @@ final class MarkdownRenderer {
     struct Result { var html: String; var codes: [String]; var tokens: [[String: Any]] = [] }
     private let lock = NSRecursiveLock()
     private let context = JSContext()!
+    // Small bounded LRU: switching between recent tasks reuses parsed/highlighted
+    // markup; large documents and export rendering do not occupy this cache.
+    private var previewCache: [(source: String,result: Result)] = []
+    private var cacheBytes = 0
+    private let cacheBudget = 2_000_000
     private init() {
         context.evaluateScript("var console = {log:function(){},warn:function(){},error:function(){}};")
         for name in ["highlight-all.min","markdown-it.min"] {
@@ -34,11 +39,22 @@ final class MarkdownRenderer {
     var languages: [String] { lock.lock(); defer { lock.unlock() }; return context.evaluateScript("hljs.listLanguages()")?.toArray() as? [String] ?? [] }
     func render(_ source: String, forExport: Bool = false) -> Result {
         lock.lock(); defer { lock.unlock() }
+        if !forExport,let index = previewCache.firstIndex(where: { $0.source == source }) {
+            let hit = previewCache.remove(at: index); previewCache.append(hit); return hit.result
+        }
         guard let value = context.objectForKeyedSubscript("renderZilo")?.call(withArguments: [source,forExport]),
               let result = value.toDictionary(), let html = result["html"] as? String else {
             return Result(html: "<p>" + Self.escape(source) + "</p>",codes: [])
         }
-        return Result(html: html,codes: result["codes"] as? [String] ?? [],tokens: result["tokens"] as? [[String: Any]] ?? [])
+        let rendered = Result(html: html,codes: result["codes"] as? [String] ?? [],tokens: result["tokens"] as? [[String: Any]] ?? [])
+        let bytes = source.utf8.count + html.utf8.count
+        if !forExport,bytes <= cacheBudget / 2 {
+            while !previewCache.isEmpty && (previewCache.count >= 8 || cacheBytes + bytes > cacheBudget) {
+                let removed = previewCache.removeFirst(); cacheBytes -= removed.source.utf8.count + removed.result.html.utf8.count
+            }
+            previewCache.append((source,rendered)); cacheBytes += bytes
+        }
+        return rendered
     }
     static func escape(_ value: String) -> String {
         value.replacingOccurrences(of: "&",with: "&amp;").replacingOccurrences(of: "<",with: "&lt;").replacingOccurrences(of: ">",with: "&gt;").replacingOccurrences(of: "\"",with: "&quot;")
@@ -160,9 +176,10 @@ struct MarkdownPreviewView: NSViewRepresentable {
         var rendered = MarkdownRenderer.Result(html: "",codes: [])
         func update(_ value: String,root: URL?,dark: Bool,theme: String = "blue",in view: WKWebView) {
             guard value != source || root != self.root || dark != self.dark || theme != self.theme || paperBackground != displayedPaper || compact != displayedCompact else { return }
+            let contentChanged = value != source
             self.source = value; self.root = root; self.dark = dark; self.theme = theme
             displayedPaper = paperBackground; displayedCompact = compact
-            rendered = MarkdownRenderer.shared.render(value)
+            if contentChanged { rendered = MarkdownRenderer.shared.render(value) }
             if ready { display(in: view) }
         }
         func display(in view: WKWebView) {

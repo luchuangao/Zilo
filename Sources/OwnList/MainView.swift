@@ -409,7 +409,6 @@ struct TaskWorkspace: View {
     @State private var countdownEditor: Countdown?
     @AppStorage("showCountdownsToday") private var showCountdownsToday = true
     var todayCountdowns: [Countdown] { creationContext == "today" && showCountdownsToday ? store.countdowns.filter { !$0.deleted && $0.pinned }.sorted { $0.days() < $1.days() } : [] }
-    @State private var hoveredTaskHandle: UUID?
     @ObservedObject private var dragFeedback = TaskDragFeedback.shared
     @State private var rowHeights: [UUID:CGFloat] = [:]
     @State private var collapsedTasks = Set<UUID>()
@@ -569,8 +568,8 @@ struct TaskWorkspace: View {
     }
     func row(_ t: TaskItem) -> some View {
         let children = store.tasks.filter { $0.parentID == t.id && !$0.deleted }
-        let summary = TaskDocument.summary(t)
-        let hasContent = !t.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let summary = showSummaries ? TaskDocument.summary(t) : ""
+        let hasContent = t.notes.contains { !$0.isWhitespace }
         let statusDescriptions: [String?] = [children.isEmpty ? nil : ZiloLanguage.text("子任务") + " \(children.filter(\.completed).count)/\(children.count)",hasContent ? ZiloLanguage.text("任务正文") : nil,t.attachments.isEmpty ? nil : ZiloLanguage.text("附件")]
         let statusHelp = statusDescriptions.compactMap { $0 }.joined(separator: " · ")
         return HStack(alignment: .top,spacing: 6) {
@@ -613,18 +612,14 @@ struct TaskWorkspace: View {
             }
         }
         Spacer(); if t.pinned == true { Image(systemName: "pin.fill").font(.system(size: 11)).foregroundStyle(ListTheme.secondary).accessibilityLabel("已置顶") }; if t.starred { Image(systemName: "star.fill").foregroundStyle(.yellow) }
-    }.padding(.vertical,10).padding(.leading,16).padding(.trailing,4).background { RoundedRectangle(cornerRadius: 8).fill(store.selectedTask == t.id ? ListTheme.selection : hoveredTaskHandle == t.id ? ListTheme.hover : .clear).padding(.leading,12) }.background { TaskRowHover { hoveredTaskHandle = $0 ? t.id : (hoveredTaskHandle == t.id ? nil : hoveredTaskHandle) } }.overlay(alignment: .bottom) { if store.selectedTask != t.id { ListTheme.separator.frame(height: 0.5).padding(.leading,57) } }.contentShape(Rectangle()).background { GeometryReader { proxy in Color.clear.onAppear { rowHeights[t.id] = proxy.size.height }.onChange(of: proxy.size.height) { _,height in rowHeights[t.id] = height } } }
+    }.padding(.vertical,10).padding(.leading,16).padding(.trailing,4).overlay(alignment: .bottom) { if store.selectedTask != t.id { ListTheme.separator.frame(height: 0.5).padding(.leading,57) } }.contentShape(Rectangle()).background { GeometryReader { proxy in Color.clear.onAppear { rowHeights[t.id] = proxy.size.height }.onChange(of: proxy.size.height) { _,height in rowHeights[t.id] = height } } }
         .overlay {
             TaskDragHandle(payload: t.id.uuidString,visible: false,onBegin: finishRenaming,
                 onClick: { finishRenaming(); store.selectedTask = t.id; collapsedTasks.remove(t.id) },onDoubleClick: { openTaskWindow(t.id) },excludedTitleHeight: max(children.isEmpty ? 20 : 28,taskFontSize + 6))
                 .frame(maxWidth: .infinity,maxHeight: .infinity)
                 .accessibilityHidden(true).allowsHitTesting(!batchMode)
         }
-        .overlay(alignment: .topLeading) {
-            TaskDragHandle(payload: t.id.uuidString,visible: hoveredTaskHandle == t.id,onBegin: finishRenaming)
-                .frame(width: 16,height: 24).offset(x: 0,y: 8)
-                .help("拖动：上／下方排序，中间放为子任务").accessibilityLabel("拖动任务“" + t.title + "”")
-        }
+        .modifier(TaskRowInteractionAppearance(selected: store.selectedTask == t.id,task: t,onBegin: finishRenaming))
         .overlay {
             if dragFeedback.state?.target == t.id {
                 if dragFeedback.state?.position == .child { RoundedRectangle(cornerRadius: 8).strokeBorder(ListTheme.accent,lineWidth: 1.5).overlay(alignment: .trailing) { Text("放为子任务").font(.caption2).padding(5).background(ListTheme.canvas).padding(.trailing,5) }.allowsHitTesting(false) }
@@ -688,4 +683,22 @@ struct AdvancedTaskSearch: View {
         Toggle("仅收藏",isOn: $criteria.starredOnly)
         Text("条件同时满足时显示任务").font(.caption).foregroundStyle(.secondary)
     }.font(.system(size: 13)) }
+}
+
+/// Hover updates belong to one row, not the entire task list and its detail pane.
+private struct TaskRowInteractionAppearance: ViewModifier {
+    let selected: Bool
+    let task: TaskItem
+    let onBegin: () -> Void
+    @State private var hovering = false
+    func body(content: Content) -> some View {
+        content
+            .background { RoundedRectangle(cornerRadius: 8).fill(selected ? ListTheme.selection : hovering ? ListTheme.hover : .clear).padding(.leading,12) }
+            .background { TaskRowHover { hovering = $0 } }
+            .overlay(alignment: .topLeading) {
+                TaskDragHandle(payload: task.id.uuidString,visible: hovering,onBegin: onBegin)
+                    .frame(width: 16,height: 24).offset(x: 0,y: 8)
+                    .help("拖动：上／下方排序，中间放为子任务").accessibilityLabel("拖动任务“" + task.title + "”")
+            }
+    }
 }
