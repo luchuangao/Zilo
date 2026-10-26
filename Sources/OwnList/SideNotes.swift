@@ -189,6 +189,13 @@ private final class FloatingNotesWindow: NSPanel {
             Task { @MainActor in guard let self,self.animation == token else { return }; self.panel?.orderOut(nil) }
         }
     }
+    func openLinkedTask(_ id: UUID) {
+        guard let store,store.tasks.contains(where: { $0.id == id && !$0.deleted }) else { return }
+        store.notificationTask = id
+        hide()
+        DesktopBridge.mainAction?()
+        NSApp.activate(ignoringOtherApps: true)
+    }
     func toggle() {
         if panel?.isVisible == true && presented { hide() }
         else if let store { show(store) }
@@ -385,7 +392,7 @@ struct SideNotesView: View {
             if let task = note.document(tasks: store.tasks) {
                 Button("复制内容",systemImage: "doc.on.doc") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(task.notes,forType: .string) }
             }
-            if let id = note.taskID { Button("打开关联任务",systemImage: "arrow.up.forward") { store.notificationTask = id; NSApp.activate(ignoringOtherApps: true) } }
+            if let id = note.taskID { Button("打开关联任务",systemImage: "arrow.up.forward") { SideNotesPanel.shared.openLinkedTask(id) } }
             Divider(); Button("新建便签",systemImage: "square.and.pencil",action: createNote)
             Button("已删除便签",systemImage: "trash") { trash = true }
             Divider(); Button("删除便签",systemImage: "trash",role: .destructive) { store.updateSideNote(note.id) { $0.deleted = true } }
@@ -480,9 +487,12 @@ private struct PaperNoteCard<Actions: View>: View {
     }
     private func tools(_ task: TaskItem) -> some View {
         HStack(spacing: 5) {
-            if note.taskID != nil {
-                Image(systemName: "link").font(.system(size: 10,weight: .medium)).frame(width: 22,height: 22)
-                    .background(ListTheme.text.opacity(0.045),in: RoundedRectangle(cornerRadius: 5)).help("关联任务").accessibilityLabel("关联任务")
+            if let id = note.taskID {
+                Button { SideNotesPanel.shared.openLinkedTask(id) } label: {
+                    Image(systemName: "link").font(.system(size: 10,weight: .medium)).frame(width: 28,height: 24)
+                        .background(ListTheme.text.opacity(0.045),in: RoundedRectangle(cornerRadius: 5)).contentShape(Rectangle())
+                }.buttonStyle(.plain).quietHover().help("打开关联任务").accessibilityLabel("打开关联任务")
+                    .disabled(!store.tasks.contains { $0.id == id && !$0.deleted })
             }
             Spacer(minLength: 0)
             if !note.deleted && task.editingMode == .markdown {

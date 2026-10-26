@@ -186,6 +186,8 @@ enum WidgetSnapshot {
 }
 
 @MainActor enum DesktopBridge {
+    static weak var mainWindow: NSWindow?
+    static var mainAction: (() -> Void)?
     static var notesAction: (() -> Void)?; static var notesHotKey: EventHotKeyRef?
     static var windows: [NSWindow] = []; static var quickAction: (() -> Void)?; static var hotKey: EventHotKeyRef?; static var installedHandler = false; static var hotKeyError: OSStatus = noErr
     static func updateBadge(_ count: Int) { NSApp?.dockTile.badgeLabel = count == 0 ? nil : String(count) }

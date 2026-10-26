@@ -54,6 +54,7 @@ struct MainView: View {
     @AppStorage("smartListVisibility") private var rawSmartVisibility = ""
     @EnvironmentObject var store: Store
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openMainWindow
     @State private var profileMenuVisible = false
     @State private var syncPanelVisible = false; @State private var notificationPanelVisible = false
     @AppStorage("moduleVisibility") private var moduleVisibility = ""
@@ -149,8 +150,17 @@ struct MainView: View {
                 }
             } else { Group { switch module { case .calendar: CalendarView(); case .matrix: MatrixView(); case .focus: FocusView(); case .habits: HabitsView(); case .countdown: CountdownView(); case .stats: StatisticsView(); case .tasks: EmptyView() } }.frame(maxWidth: .infinity,maxHeight: .infinity) }
         }.frame(maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
-        }.ignoresSafeArea(.container,edges: .top).background(WindowChrome()).background(ListTheme.canvas).foregroundStyle(ListTheme.text).font(.system(size: fontScale)).themeAppearance().frame(minWidth: (parallel ? 1240 : 1000),minHeight: 620)
-            .onAppear(perform: restoreWorkspace)
+        }.ignoresSafeArea(.container,edges: .top).background(WindowChrome()).background(MainWindowReference()).background(ListTheme.canvas).foregroundStyle(ListTheme.text).font(.system(size: fontScale)).themeAppearance().frame(minWidth: (parallel ? 1240 : 1000),minHeight: 620)
+            .onAppear {
+                restoreWorkspace()
+                DesktopBridge.mainAction = {
+                    if let window = DesktopBridge.mainWindow {
+                        if window.isMiniaturized { window.deminiaturize(nil) }
+                        window.makeKeyAndOrderFront(nil)
+                    } else { openMainWindow(id: "main") }
+                }
+                if let id = store.notificationTask { openNotificationTask(id); store.notificationTask = nil }
+            }
             .onChange(of: workspaceState) { _,state in if didInitialize { state.save() } }
             .onChange(of: store.notificationTask) { _,id in if let id { openNotificationTask(id); store.notificationTask = nil } }
             .onChange(of: store.notificationModule) { _,target in if let target { module = target; store.notificationModule = nil } }
@@ -187,10 +197,15 @@ struct MainView: View {
         workspaceState.save()
     }
     func openNotificationTask(_ id: UUID) {
-        guard let task = store.tasks.first(where: { $0.id == id }) else { return }
-        module = .tasks; detailsVisible = true; notificationPanelVisible = false
-        selection = task.deleted ? "trash" : task.completed ? "completed" : task.listID.map { "list:" + $0.uuidString } ?? "inbox"
-        DispatchQueue.main.async { store.selectedTask = id }
+        guard let destination = MacTaskDestination(id: id,tasks: store.tasks) else { return }
+        module = .tasks; detailsVisible = true; sidebarVisible = true; notificationPanelVisible = false
+        searchVisible = false; search = ""; searchCriteria = TaskSearchCriteria()
+        selection = destination.selection; showCompleted = true
+        viewMode = "列表"
+        DispatchQueue.main.async {
+            // Sidebar selection clears the previous detail before this runs.
+            viewMode = "列表"; store.selectedTask = id; store.taskRevealToken = UUID()
+        }
     }
     var profileMenu: some View {
         VStack(alignment: .leading,spacing: 2) {
@@ -401,6 +416,47 @@ struct MainView: View {
     func importFile() { let p = NSOpenPanel(); p.allowedContentTypes = [.json,.commaSeparatedText,.plainText]; if p.runModal() == .OK, let url = p.url { do { importPreview = try ImportService.preview(url); showImport = true } catch { store.error = error.localizedDescription } } }
     func renameFolder(_ old: String) { let alert = NSAlert(); alert.messageText = ZiloLanguage.text("重命名文件夹"); let field = NSTextField(string: old); field.frame = NSRect(x: 0,y: 0,width: 260,height: 24); alert.accessoryView = field; alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消"); if alert.runModal() == .alertFirstButtonReturn { for var list in store.lists.filter({ $0.folder == old }) { list.folder = field.stringValue.trimmingCharacters(in: .whitespaces); store.save(list) } } }
 }
+private struct MainWindowReference: NSViewRepresentable {
+    func makeNSView(context: Context) -> ReferenceView { ReferenceView() }
+    func updateNSView(_ view: ReferenceView,context: Context) {}
+    final class ReferenceView: NSView {
+        private var closeObserver: NSObjectProtocol?
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+            guard let window else { return }
+            DesktopBridge.mainWindow = window
+            closeObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification,object: window,queue: .main) { [weak window] _ in
+                if DesktopBridge.mainWindow === window { DesktopBridge.mainWindow = nil }
+            }
+        }
+        deinit { if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) } }
+    }
+}
+
+struct MacTaskDestination {
+    let selection: String
+    let ancestors: Set<UUID>
+    let completedRoot: Bool
+    let rootID: UUID
+    init?(id: UUID,tasks: [TaskItem]) {
+        let records = Dictionary(tasks.map { ($0.id,$0) },uniquingKeysWith: { first,_ in first })
+        guard let target = records[id] else { return nil }
+        var root = target,chain = Set<UUID>(),visited: Set<UUID> = [id]
+        while let parent = root.parentID,let record = records[parent] {
+            guard visited.insert(parent).inserted else { return nil }
+            chain.insert(parent); root = record
+        }
+        ancestors = chain; completedRoot = root.completed; rootID = root.id
+        if target.deleted || root.deleted { selection = "trash" }
+        else if target.abandoned == true || root.abandoned == true { selection = "abandoned" }
+        else if target.archived == true || root.archived == true { selection = "archived" }
+        else if root.isTemplate { selection = "templates" }
+        else if root.completed { selection = "completed" }
+        else { selection = root.listID.map { "list:" + $0.uuidString } ?? "inbox" }
+    }
+}
+
 struct TaskWorkspace: View {
     @Environment(\.openWindow) private var openWindow
     @AppStorage("accent") private var applicationTheme = "blue"
@@ -427,7 +483,7 @@ struct TaskWorkspace: View {
         if todayCountdowns.isEmpty && visible.isEmpty && trashLists.isEmpty && (viewMode != "列表" || (store.lists.first { $0.id == listID }?.sections.isEmpty ?? true)) { QuietEmptyState(title: isTrash ? "回收站为空" : "清单很清爽",message: "把想做的事情记下来，一件一件完成。",symbol: "checkmark.circle") }
         else if viewMode == "看板" && !isTrash { ScrollView(.horizontal) { HStack(alignment: .top,spacing: 12) { ForEach(["待安排","进行中","已完成"],id: \.self) { column in VStack(alignment: .leading) { Text(column).font(.headline).padding(10); ForEach(visible.filter { column == "已完成" ? $0.completed : column == "进行中" ? !$0.completed && $0.start != nil : !$0.completed && $0.start == nil }) { t in row(t).padding(10).background(.background,in: RoundedRectangle(cornerRadius: 10)) }; Spacer() }.padding(8).frame(width: 260).background(ListTheme.input,in: RoundedRectangle(cornerRadius: 10)).dropDestination(for: String.self) { values,_ in for raw in values { if let id = UUID(uuidString: raw) { store.mutate(id) { $0.completed = column == "已完成"; $0.completedAt = $0.completed ? Date() : nil; $0.start = column == "进行中" ? Date() : nil } } }; return true } } }.padding(20) } }
         else if viewMode == "时间线" && !isTrash { TimelineViewContent(tasks: visible) }
-        else { ScrollView {
+        else { ScrollViewReader { reader in ScrollView {
             LazyVStack(alignment: .leading,spacing: 0) {
                 if !todayCountdowns.isEmpty {
                     Button { countdownsExpanded.toggle() } label: { HStack(spacing: 8) { Image(systemName: countdownsExpanded ? "chevron.down" : "chevron.right").font(.system(size: 10)); Text("倒数纪念日").fontWeight(.semibold); Text("\(todayCountdowns.count)").foregroundStyle(.tertiary); Spacer() } }.buttonStyle(.plain).padding(.leading,20).padding(.vertical,14)
@@ -484,7 +540,16 @@ struct TaskWorkspace: View {
                     if completedExpanded { ForEach(completed) { hierarchyRows($0) } }
                 }
             }.padding(.trailing,12).padding(.top,8).padding(.bottom,20)
-        } }
+        }.task(id: store.taskRevealToken) {
+            guard let id = store.selectedTask,let destination = MacTaskDestination(id: id,tasks: store.tasks) else { return }
+            collapsedTasks.subtract(destination.ancestors)
+            if destination.completedRoot { completedExpanded = true }
+            // Materialize the lazy root before locating a nested task row.
+            reader.scrollTo(destination.rootID,anchor: .center)
+            do { try await Task.sleep(for: .milliseconds(35)) } catch { return }
+            guard !Task.isCancelled else { return }
+            reader.scrollTo("task:" + id.uuidString,anchor: .center)
+        } } }
     }.frame(maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
         .onAppear { completedExpanded = creationContext == "completed" || isTrash }
         .onChange(of: store.selectedTask) { _,id in if let id { collapsedTasks.remove(id) } }
@@ -504,7 +569,7 @@ struct TaskWorkspace: View {
     func hierarchyRows(_ root: TaskItem) -> some View {
         VStack(alignment: .leading,spacing: 0) {
             ForEach(isTrash ? [TaskHierarchy.Row(task: root,depth: 0)] : TaskHierarchy.rows(root: root,tasks: store.tasks.filter { creationContext == "abandoned" || $0.abandoned != true },collapsed: collapsedTasks)) { entry in
-                row(entry.task).padding(.leading,CGFloat(entry.depth) * 24)
+                row(entry.task).padding(.leading,CGFloat(entry.depth) * 24).id("task:" + entry.task.id.uuidString)
             }
             if !isTrash,
                let raw = dragFeedback.state?.payload,
@@ -512,7 +577,7 @@ struct TaskWorkspace: View {
                store.tasks.contains(where: { $0.id == source && $0.parentID != nil }) {
                 topLevelDropTarget(after: root)
             }
-        }
+        }.id(root.id)
     }
     func topLevelDropTarget(after root: TaskItem) -> some View {
         let highlighted = dragFeedback.state?.topLevelTarget == root.id

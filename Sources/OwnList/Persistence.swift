@@ -156,6 +156,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
     @Published var sideNotes: [SideNote] = []; @Published var noteFolders: [SideNoteFolder] = []
     @Published var countdowns: [Countdown] = []; @Published var activity: [ActivityEntry] = []
     @Published var checkingSync = false
+    @Published var taskRevealToken = UUID()
     @Published var notificationTask: UUID?; @Published var notificationHabit: UUID?; @Published var notificationCountdown: UUID?; @Published var notificationModule: Module?
     @Published var error: String?; @Published var syncStatus = "本地保存"; @Published var selectedTask: UUID?
     private var backupTimer: Timer?

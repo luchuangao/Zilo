@@ -3,6 +3,28 @@ import AppKit
 @testable import OwnList
 
 final class HTMLAndSideNotesTests: XCTestCase {
+    func testLinkedTaskDestinationResolvesContainerAndAncestorsWithoutChangingTasks() throws {
+        let list = UUID(); var root = TaskItem(); root.listID = list
+        var child = TaskItem(); child.parentID = root.id; child.listID = list; child.completed = true
+        var grandchild = TaskItem(); grandchild.parentID = child.id; grandchild.listID = list
+        let route = try XCTUnwrap(MacTaskDestination(id: grandchild.id,tasks: [root,child,grandchild]))
+        XCTAssertEqual(route.selection,"list:" + list.uuidString)
+        XCTAssertEqual(route.ancestors,[root.id,child.id]); XCTAssertEqual(route.rootID,root.id)
+        root.completed = true
+        XCTAssertEqual(MacTaskDestination(id: grandchild.id,tasks: [root,child,grandchild])?.selection,"completed")
+        XCTAssertEqual(MacTaskDestination(id: grandchild.id,tasks: [root,child,grandchild])?.completedRoot,true)
+        root.completed = false; root.archived = true
+        XCTAssertEqual(MacTaskDestination(id: root.id,tasks: [root])?.selection,"archived")
+        root.archived = false; root.abandoned = true
+        XCTAssertEqual(MacTaskDestination(id: root.id,tasks: [root])?.selection,"abandoned")
+        root.abandoned = false; root.isTemplate = true
+        XCTAssertEqual(MacTaskDestination(id: root.id,tasks: [root])?.selection,"templates")
+        root.deleted = true
+        XCTAssertEqual(MacTaskDestination(id: root.id,tasks: [root])?.selection,"trash")
+        XCTAssertNil(MacTaskDestination(id: UUID(),tasks: [root]))
+        root.deleted = false; root.parentID = child.id
+        XCTAssertNil(MacTaskDestination(id: child.id,tasks: [root,child]))
+    }
     func testLongMindMapLabelsUseIdenticalLinesAndEnoughNodeHeight() throws {
         let labels = ["即时查询 (Instant Query)","范围查询 (Range Query)","指标名称可以放到大括号里作为筛选条件",String(repeating: "long_identifier_",count: 10),"第一行<br>第二行"]
         let diagram = try MindMapDocument.parse("mindmap\n  PromQL\n" + labels.map { "    " + $0 }.joined(separator: "\n"))
