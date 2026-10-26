@@ -384,7 +384,6 @@ struct SideNotesView: View {
             }
             if let task = note.document(tasks: store.tasks) {
                 Button("复制内容",systemImage: "doc.on.doc") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(task.notes,forType: .string) }
-                Button("HTML 网页（.html）",systemImage: "square.and.arrow.up") { export(task) }
             }
             if let id = note.taskID { Button("打开关联任务",systemImage: "arrow.up.forward") { store.notificationTask = id; NSApp.activate(ignoringOtherApps: true) } }
             Divider(); Button("新建便签",systemImage: "square.and.pencil",action: createNote)
@@ -397,10 +396,7 @@ struct SideNotesView: View {
         trash = false; SideNotesPanel.shared.updateTitle(trash: false); search = ""
         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { reader.scrollTo(id,anchor: .top) }
     }
-    private func export(_ task: TaskItem) {
-        let save = NSSavePanel(); save.allowedContentTypes = [.html]; save.nameFieldStringValue = HTMLDocument.filename(task.title)
-        if save.runModal() == .OK,let url = save.url { do { try HTMLDocument.data(task: task,baseURL: store.persistence.root).write(to: url,options: .atomic) } catch { store.error = error.localizedDescription } }
-    }
+
 }
 
 private struct PaperNoteCard<Actions: View>: View {

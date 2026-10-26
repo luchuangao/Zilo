@@ -15,7 +15,6 @@ struct MobileSideNotesView: View {
     @State private var trash = false
     @State private var selected: MobileSideNoteSelection?
     @State private var deletingNote: UUID?
-    @State private var exportFile: MobileHTMLFile?
     private var notes: [SideNote] { SideNotesLibrary.visible(store.sideNotes,tasks: store.tasks,search: search,trash: trash) }
     var body: some View {
         ScrollView {
@@ -43,7 +42,6 @@ struct MobileSideNotesView: View {
                             Button(note.pinned ? "取消置顶" : "置顶",systemImage: "pin") { store.updateSideNote(note.id) { $0.pinned.toggle() } }
                             Button(note.folded ? "展开便签" : "折叠便签",systemImage: "rectangle.compress.vertical") { store.updateSideNote(note.id) { $0.folded.toggle() } }
                             MobileNoteColorMenu(current: note.color) { color in store.updateSideNote(note.id) { $0.color = color } }
-                            if let document { Button("HTML 网页（.html）",systemImage: "square.and.arrow.up") { export(document) } }
                             Button("删除便签",systemImage: "trash",role: .destructive) { store.updateSideNote(note.id) { $0.deleted = true } }
                         }
                     }
@@ -67,9 +65,8 @@ struct MobileSideNotesView: View {
                 Button("永久删除",role: .destructive) { if let id = deletingNote { _ = store.permanentlyDeleteSideNote(id) }; deletingNote = nil }
             } message: { Text("此操作无法撤销，关联任务会保留。") }
             .sheet(item: $selected) { selection in NavigationStack { MobileSideNoteEditor(noteID: selection.id) } }
-            .sheet(item: $exportFile) { MobileShare(items: [$0.url]) }
     }
-    private func export(_ document: TaskItem) { do { exportFile = MobileHTMLFile(url: try HTMLDocument.temporaryFile(task: document,baseURL: store.persistence.root)) } catch { store.error = error.localizedDescription } }
+
     private func badge(_ title: String,symbol: String) -> some View {
         HStack(spacing: 4) { Image(systemName: symbol); Text(title).lineLimit(1).truncationMode(.middle) }.font(.caption2.weight(.medium)).foregroundStyle(.secondary).padding(.horizontal,8).padding(.vertical,4).background(accent.opacity(0.06),in: Capsule())
     }
@@ -83,7 +80,6 @@ struct MobileSideNoteEditor: View {
     @State private var preview = false
     @State private var height: CGFloat = 200
     @State private var deleting = false
-    @State private var exported: MobileHTMLFile?
     private var note: SideNote? { store.sideNotes.first { $0.id == noteID } }
     private var document: TaskItem? { note?.document(tasks: store.tasks) }
     var body: some View {
@@ -116,7 +112,7 @@ struct MobileSideNoteEditor: View {
                     else {
                         Button(note.pinned ? "取消置顶" : "置顶",systemImage: "pin") { store.updateSideNote(noteID) { $0.pinned.toggle() } }
                         MobileNoteColorMenu(current: note.color) { color in store.updateSideNote(noteID) { $0.color = color } }
-                        if let document { Button("复制内容",systemImage: "doc.on.doc") { UIPasteboard.general.string = document.notes }; Button("HTML 网页（.html）",systemImage: "square.and.arrow.up") { do { exported = MobileHTMLFile(url: try HTMLDocument.temporaryFile(task: document,baseURL: store.persistence.root)) } catch { store.error = error.localizedDescription } } }
+                        if let document { Button("复制内容",systemImage: "doc.on.doc") { UIPasteboard.general.string = document.notes } }
                         Button("删除便签",systemImage: "trash",role: .destructive) { store.updateSideNote(noteID) { $0.deleted = true }; dismiss() }
                     }
                 }
@@ -125,7 +121,6 @@ struct MobileSideNoteEditor: View {
             Button("取消",role: .cancel) {}
             Button("永久删除",role: .destructive) { if store.permanentlyDeleteSideNote(noteID) { dismiss() } }
         } message: { Text("此操作无法撤销，关联任务会保留。") }
-        .sheet(item: $exported) { MobileShare(items: [$0.url]) }
     }
 }
 private struct MobileNoteColorMenu: View {
