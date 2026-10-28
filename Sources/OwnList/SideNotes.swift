@@ -9,6 +9,49 @@ extension Store: SideNotesStore {
     @discardableResult func persistNoteTask(_ task: TaskItem) -> Bool { save(task,undoable: false) }
 }
 
+/// A local appearance preference; note colors and synced content stay unchanged.
+enum SideNotesAppearance: String, CaseIterable, Identifiable {
+    case solid, frosted, clear
+    static let preferenceKey = "sideNotesAppearance"
+    var id: String { rawValue }
+    init(stored: String) { self = Self(rawValue: stored) ?? .frosted }
+    var title: String {
+        switch self { case .solid: return "纯色"; case .frosted: return "磨砂"; case .clear: return "通透" }
+    }
+    func usesGlass(reduceTransparency: Bool) -> Bool { self != .solid && !reduceTransparency }
+    func tintOpacity(expanded: Bool,editing: Bool,reduceTransparency: Bool) -> Double {
+        guard usesGlass(reduceTransparency: reduceTransparency) else { return 1 }
+        if editing { return 0.85 }
+        switch self {
+        case .solid: return 1
+        case .frosted: return expanded ? 0.38 : 0.24
+        case .clear: return expanded ? 0.22 : 0.12
+        }
+    }
+}
+
+/// Blur only the surface behind each card. Text and controls remain fully opaque.
+private struct NoteGlassMaterial: NSViewRepresentable {
+    var appearance: SideNotesAppearance
+    var dark: Bool
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NoteGlassEffectView()
+        view.blendingMode = .behindWindow; view.state = .active
+        view.wantsLayer = true; view.layer?.cornerRadius = 12; view.layer?.masksToBounds = true
+        updateNSView(view,context: context)
+        return view
+    }
+    func updateNSView(_ view: NSVisualEffectView,context: Context) {
+        let material: NSVisualEffectView.Material = appearance == .clear ? .underWindowBackground : .sidebar
+        if view.material != material { view.material = material }
+        let name: NSAppearance.Name = dark ? .darkAqua : .aqua
+        if view.appearance?.name != name { view.appearance = NSAppearance(named: name) }
+    }
+}
+private final class NoteGlassEffectView: NSVisualEffectView {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
 @MainActor final class SideNotesSelection: ObservableObject {
     @Published var selected: UUID?
     @Published var reveal = UUID()
@@ -320,6 +363,7 @@ struct SideNotesView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var selection: SideNotesSelection
+    @AppStorage(SideNotesAppearance.preferenceKey) private var appearance = SideNotesAppearance.frosted.rawValue
     @State private var search = ""
     @State private var trash = false
     @State private var deletingNote: UUID?
@@ -352,6 +396,7 @@ struct SideNotesView: View {
         .background(Color.clear).foregroundStyle(ListTheme.text)
         .contextMenu {
             Button("新建便签",systemImage: "square.and.pencil",action: createNote)
+            appearanceMenu
             Button(trash ? "返回便签" : "已删除便签",systemImage: "trash") { trash.toggle(); search = "" }
         }
         .alert("永久删除便签？",isPresented: Binding(get: { deletingNote != nil },set: { if !$0 { deletingNote = nil } })) {
@@ -374,6 +419,13 @@ struct SideNotesView: View {
     }
     private func returnToNotes() { trash = false; search = ""; selection.expanded = nil }
     private func createNote() { trash = false; search = ""; selection.selected = store.createSideNote(); selection.expanded = selection.selected; selection.reveal = UUID() }
+    private var appearanceMenu: some View {
+        Menu("便签外观") {
+            ForEach(SideNotesAppearance.allCases) { style in
+                Toggle(LocalizedStringKey(style.title),isOn: Binding(get: { SideNotesAppearance(stored: appearance) == style },set: { if $0 { appearance = style.rawValue } }))
+            }
+        }
+    }
     @ViewBuilder private func noteActions(_ note: SideNote) -> some View {
         if note.deleted {
             Button("恢复便签",systemImage: "arrow.uturn.backward") { store.updateSideNote(note.id) { $0.deleted = false } }
@@ -389,6 +441,7 @@ struct SideNotesView: View {
                     }
                 }
             }
+            appearanceMenu
             if let task = note.document(tasks: store.tasks) {
                 Button("复制内容",systemImage: "doc.on.doc") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(task.notes,forType: .string) }
             }
@@ -410,6 +463,11 @@ private struct PaperNoteCard<Actions: View>: View {
     @EnvironmentObject private var store: Store
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @AppStorage(SideNotesAppearance.preferenceKey) private var appearanceValue = SideNotesAppearance.frosted.rawValue
+    private enum EditingField: Hashable { case title, body }
+    @FocusState private var editingField: EditingField?
+    @State private var richEditing = false
     var note: SideNote
     @ObservedObject var selection: SideNotesSelection
     var contentWidth: CGFloat
@@ -428,6 +486,10 @@ private struct PaperNoteCard<Actions: View>: View {
     private var paper: SideNotePaper { SideNotePaper(stored: note.color) }
     private var dark: Bool { scheme == .dark }
     private var selected: Bool { selection.selected == note.id }
+    private var appearance: SideNotesAppearance { SideNotesAppearance(stored: appearanceValue) }
+    private var glass: Bool { appearance.usesGlass(reduceTransparency: reduceTransparency) }
+    private var editing: Bool { !folded && (editingField != nil || richEditing) }
+    private var tintOpacity: Double { appearance.tintOpacity(expanded: !folded,editing: editing,reduceTransparency: reduceTransparency) }
     var body: some View {
         VStack(alignment: .leading,spacing: 8) {
             titleRow
@@ -438,13 +500,28 @@ private struct PaperNoteCard<Actions: View>: View {
                 } else { Text("关联任务暂不可用，请同步后重试。").font(.caption).foregroundStyle(ListTheme.secondary).frame(height: 28,alignment: .topLeading) }
             }
         }.padding(12).frame(maxWidth: .infinity,alignment: .leading)
-            .background(paper.color(dark: dark),in: RoundedRectangle(cornerRadius: 12))
+            .background {
+                ZStack {
+                    if glass { NoteGlassMaterial(appearance: appearance,dark: dark) }
+                    paper.color(dark: dark).opacity(tintOpacity)
+                }.allowsHitTesting(false)
+            }
             .clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay {
+                if glass {
+                    RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(dark ? 0.12 : 0.42),lineWidth: 0.5).allowsHitTesting(false)
+                }
+            }
             .overlay { RoundedRectangle(cornerRadius: 12).strokeBorder(selected ? ListTheme.accent.opacity(dark ? 0.5 : 0.32) : ListTheme.text.opacity(hovering ? 0.16 : 0.07),lineWidth: 1).allowsHitTesting(false) }
             .shadow(color: .black.opacity(dark ? (hovering ? 0.15 : 0.08) : (hovering ? 0.065 : 0.025)),radius: hovering ? 7 : 3,x: 0,y: 2)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12),value: hovering)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.2),value: note.color)
-            .onChange(of: folded) { _,value in animateFoldResize(value) }
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16),value: editing)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.2),value: appearanceValue)
+            .onChange(of: folded) { _,value in
+                if value { editingField = nil; richEditing = false }
+                animateFoldResize(value)
+            }
             .onChange(of: selection.reveal) { _,_ in if selected { selectAndExpand() } }
             .onDisappear {
                 hover.cancel(); hover.onShow = {}; hover.onHide = {}; hover.containsPointer = { false }; hover.canHide = { true }
@@ -478,7 +555,7 @@ private struct PaperNoteCard<Actions: View>: View {
                 }.buttonStyle(.plain).accessibilityLabel(displayTitle).accessibilityHint("展开便签")
             } else if !note.deleted,document != nil {
                 TextField("无标题便签",text: Binding(get: { document?.title ?? "" },set: { store.updateSideNoteDocument(note.id,title: $0) }))
-                    .textFieldStyle(.plain).font(.system(size: 14,weight: .semibold)).accessibilityLabel("便签标题")
+                    .textFieldStyle(.plain).font(.system(size: 14,weight: .semibold)).accessibilityLabel("便签标题").focused($editingField,equals: .title)
             } else { Text(displayTitle).font(.system(size: 14,weight: .semibold)).lineLimit(1).frame(maxWidth: .infinity,alignment: .leading) }
             if note.pinned { Image(systemName: "pin.fill").font(.system(size: 10)).foregroundStyle(ListTheme.secondary).help("置顶") }
             Menu(content: actions) { Image(systemName: "ellipsis").font(.system(size: 13)).foregroundStyle(ListTheme.secondary).frame(width: 28,height: 28) }
@@ -504,12 +581,12 @@ private struct PaperNoteCard<Actions: View>: View {
     @ViewBuilder private func bodyContent(_ task: TaskItem) -> some View {
         if note.deleted { Text(TaskDocument.summary(task)).font(.system(size: 13)).textSelection(.enabled).frame(maxWidth: .infinity,alignment: .leading).frame(height: bodyHeight(task),alignment: .topLeading) }
         else if task.editingMode == .richText {
-            RichTextEditor(text: task.notes,data: task.richText,paperStyle: true) { text,data in store.updateSideNoteDocument(note.id,text: text,richText: data) }.frame(height: editorHeight(task.notes))
+            RichTextEditor(text: task.notes,data: task.richText,paperStyle: true,onEditingChanged: { richEditing = $0 }) { text,data in store.updateSideNoteDocument(note.id,text: text,richText: data) }.frame(height: editorHeight(task.notes))
         } else if preview {
-            MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,paperBackground: paper.hex(dark: dark),compact: true).frame(height: max(64,editorHeight(task.notes)))
+            MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,paperBackground: glass ? nil : paper.hex(dark: dark),compact: true,transparentBackground: glass).frame(height: max(64,editorHeight(task.notes)))
         } else {
             TextEditor(text: Binding(get: { document?.notes ?? "" },set: { store.updateSideNoteDocument(note.id,text: $0) }))
-                .font(.system(size: 13)).scrollContentBackground(.hidden).frame(height: max(64,editorHeight(task.notes))).accessibilityLabel("便签内容")
+                .font(.system(size: 13)).scrollContentBackground(.hidden).frame(height: max(64,editorHeight(task.notes))).accessibilityLabel("便签内容").focused($editingField,equals: .body)
         }
     }
     private func selectAndExpand() {

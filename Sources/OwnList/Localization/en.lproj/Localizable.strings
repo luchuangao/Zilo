@@ -889,3 +889,11 @@
 "此操作无法撤销，关联任务会保留。" = "This cannot be undone. The linked task will be kept.";
 
 "便签已永久删除，无法恢复。" = "This note was permanently deleted and cannot be restored.";
+
+"便签外观" = "Note appearance";
+
+"纯色" = "Solid";
+
+"磨砂" = "Frosted";
+
+"通透" = "Clear";

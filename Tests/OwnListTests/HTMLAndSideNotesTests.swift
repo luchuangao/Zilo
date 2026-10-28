@@ -3,6 +3,27 @@ import AppKit
 @testable import OwnList
 
 final class HTMLAndSideNotesTests: XCTestCase {
+    func testNotesGlassFallsBackToSolidAndProtectsEditingContrast() {
+        XCTAssertEqual(SideNotesAppearance(stored: "unknown"),.frosted)
+        for style in SideNotesAppearance.allCases {
+            for expanded in [false,true] {
+                for editing in [false,true] {
+                    XCTAssertFalse(style.usesGlass(reduceTransparency: true))
+                    XCTAssertEqual(style.tintOpacity(expanded: expanded,editing: editing,reduceTransparency: true),1)
+                }
+            }
+            XCTAssertEqual(SideNotesAppearance.solid.tintOpacity(expanded: true,editing: false,reduceTransparency: false),1)
+            guard style != .solid else { continue }
+            let folded = style.tintOpacity(expanded: false,editing: false,reduceTransparency: false)
+            let expanded = style.tintOpacity(expanded: true,editing: false,reduceTransparency: false)
+            let editing = style.tintOpacity(expanded: true,editing: true,reduceTransparency: false)
+            XCTAssertLessThan(folded,expanded)
+            XCTAssertLessThan(expanded,editing)
+            XCTAssertGreaterThanOrEqual(editing,0.85)
+        }
+        XCTAssertLessThan(SideNotesAppearance.clear.tintOpacity(expanded: true,editing: false,reduceTransparency: false),
+                          SideNotesAppearance.frosted.tintOpacity(expanded: true,editing: false,reduceTransparency: false))
+    }
     func testLinkedTaskDestinationResolvesContainerAndAncestorsWithoutChangingTasks() throws {
         let list = UUID(); var root = TaskItem(); root.listID = list
         var child = TaskItem(); child.parentID = root.id; child.listID = list; child.completed = true

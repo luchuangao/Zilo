@@ -546,7 +546,7 @@ final class DocumentScrollView: NSScrollView {
 }
 
 struct RichTextEditor: NSViewRepresentable {
-    var text: String; var data: Data?; var paperStyle = false; var onChange: (String,Data?) -> Void
+    var text: String; var data: Data?; var paperStyle = false; var onEditingChanged: ((Bool) -> Void)? = nil; var onChange: (String,Data?) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
     func makeNSView(context: Context) -> NSScrollView {
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
@@ -598,11 +598,13 @@ struct RichTextEditor: NSViewRepresentable {
             let snapshot = DocumentEditorSnapshot(editor: editor)
             if sync.shouldSave(snapshot) { parent.onChange(snapshot.text,snapshot.data) }
         }
+        func textDidBeginEditing(_ notification: Notification) { parent.onEditingChanged?(true) }
         func textDidChange(_ notification: Notification) {
             guard let editor = notification.object as? NSTextView else { return }
             persist(editor)
         }
         func textDidEndEditing(_ notification: Notification) {
+            parent.onEditingChanged?(false)
             guard let editor = notification.object as? NSTextView else { return }
             persist(editor)
         }
