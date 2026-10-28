@@ -1,48 +1,38 @@
-# Mac notes glass appearance QA — Build 55
+# Mac side-note appearance QA — Build 56
 
-Source visual truth: /Users/gaoluchuan/.codex/generated_images/01a10f28-c75e-7923-828d-dfc09d9526c1/exec-2be1ec02-b4a6-4cbb-a00c-b16768e7a75b.png
-Implementation captures: /Users/gaoluchuan/Documents/Codex/2026-10-07/Zilo/.release/20261028-notes-glass/lighter-edit.png; lighter-folded.png; lighter-preview.png; lighter-dark.png; appearance-menu.png; solid.png.
-Combined comparison: /Users/gaoluchuan/Documents/Codex/2026-10-07/Zilo/.release/20261028-notes-glass/comparison.png (opened and compared).
+## Final scope
 
-## Scope and normalization
+Keep only Solid / 纯色 and Clear / 通透. Frosted was removed at the user's explicit request; existing `frosted` preferences and unknown values resolve to Solid. Clear deliberately shows background content, matching the user's final direction. No note data or mobile palette migration.
 
-The selected mockup is a 1024×1536 concept poster. The accepted brief explicitly retains the existing compact native card layout and reduces the poster's bright rim/refraction. It is a material/style target, not a replacement layout. Native drawer: 320pt wide, captured at 2× (640px). Editing capture: 640×568px. Reference card region cropped to 683px wide, normalized to the same 608px card width as implementation. Three existing QA notes instead of the poster's four; text and colors are fixture content. No webpage/device chrome is part of this implementation.
+## Visual evidence
 
-Full comparison evaluates material layering, independent cards, foreground clarity, header and footer placement. Focused inspection of the title/caret, lower-right segmented picker and card gaps is readable in the 2× captures; no extra magnification is needed. The window-only screenshots flatten the area outside the native cards and do not reproduce the poster's desktop wallpaper; backdrop variation is supplied by macOS, not a baked-in gradient/image.
+Source: `.release/20261028-notes-transparency56/reference-muted.png` (reported gray appearance), `reference-color.png` (desired existing paper palette).
+Implementation: `clear-delivery.png`, `menu-final.png` in the same directory. Combined source/implementation board: `comparison-delivery.png`, opened and compared.
 
-## Findings and iteration history
+All captures are native macOS windows at 2×. Sources are approximately 640px / 320pt wide; implementation is 640×568px / 320×284pt. No density scaling is needed. The source contains four folded production notes; isolated QA has three different notes and one expanded editor. Content/card count differences are expected; the comparison targets color quality and preserved card styling rather than matching content height. The yellow paper surface provides a shared palette reference. Full board and the 2× title/menu/footer regions were inspected.
 
-- Initial implementation: native behind-window blur with popover material, folded tint .38, expanded .56, editing .90. The user requested a more transparent background after testing.
-- Revised implementation: lighter sidebar material for frosted; folded tint .24, expanded .38, editing .85. Clear tint .12/.22. Final evidence: lighter-folded.png, lighter-edit.png, lighter-preview.png and lighter-dark.png. The requested change is implemented; no additional P0/P1/P2 visual finding in these captures.
-- Expected deviations: compact 12pt corner radius, 4pt card gaps, native typography and segmented control preserved as requested; poster-only thick white rim, simulated refraction, larger fonts and decorative wallpaper are intentionally omitted.
+## Findings and fixes
 
-## Required fidelity surfaces
+- Reported defect: full-strength system material with a very faint colored overlay produced gray, muted paper colors. Fixed by removing native material entirely from Clear and compensating the translucent overlay color for its alpha. Foreground opacity is unchanged.
+- First corrected Clear version used genuine alpha transparency. User confirmed it was transparent, briefly requested background text hidden, then explicitly clarified that Clear may show text and finally removed Frosted. Final implementation follows the final request; no blur remains in Clear.
+- Menu shows exactly Solid and Clear. Native screenshot confirms legacy Frosted selects Solid. Existing paper hues and stable stored color IDs are retained.
+- No actionable P0/P1/P2 differences in the final inspected state.
 
-- Typography: native system 14pt semibold title, 13pt body; clear caret and text; long title truncates in folded mode. English Edit/Preview fits existing wider picker. Dark foreground remains light and legible.
-- Spacing/layout: no outer titlebar, search/header or footer added. Existing compact cards, stable header positions, bottom-right editor mode and content-driven height retained. The captured 320pt state has no clipped control. 280/480pt endpoints were not captured interactively in this pass; unchanged layout/clamping is covered by existing dock geometry tests and source review.
-- Colors/tokens: stable note color IDs preserved. Native light/dark material plus note tint; only background opacity changes. White rim is 0.5pt and subdued. Editing increases fill opacity to .85. Reduce Transparency forces opaque fill and removes native blur; Reduce Motion suppresses new transitions.
-- Asset quality: no new raster assets required for native blur. Existing SF Symbols and system typography retained. Reference wallpaper is environmental context, not an app-owned image asset.
-- Copy/content: new bilingual menu is Note appearance / 便签外观, Solid / 纯色, Frosted / 磨砂, Clear / 通透. Existing note content is unchanged. No design instructions appear in product UI.
+## Fidelity surfaces
 
-## Interaction and regression evidence
+- Typography: existing system 14pt semibold title and 13pt editor, clear caret, single-line title truncation. No global opacity on text or controls.
+- Layout: existing 12pt corners, 4pt gaps, compact header/footer preserved; no extra toolbar, titlebar or search. Editing/Preview stays lower-right. No clipped control in captured 320pt state.
+- Colors: Solid uses exact existing opaque palette. Clear uses 50% folded / 58% expanded / 82% editing colored background; neutral-composition correction retains the paper hue. Background affects the final composite naturally. Reduce Transparency returns to opaque paper. Reduce Motion suppresses transitions.
+- Assets: no new raster asset or custom icon. Existing native symbols and controls retained. System material background removed, so it cannot desaturate Clear.
+- Copy: bilingual Solid/Clear labels retained; unused Frosted strings removed. No prompt or implementation terms added to UI.
 
-- Native UI: folded state, click expansion, editing focus/caret, Markdown preview without opaque rectangle, all three menu options, checkmark for default Frosted, solid fallback, Chinese light and English dark inspected.
-- Appearance choice persisted as frosted in isolated QA app preferences after switching/reopening.
-- Native hover detector and exclusive expansion logic remain unchanged. User exercised initial glass build and requested only more transparency; final automatic hover timing still uses the existing verified controller.
-- Complete suite: 159 tests, zero failures (tests-final.log). After transparency revision: all 19 HTMLAndSideNotesTests pass (tests-lighter.log), including accessibility fallback and editing contrast checks, hover protection, linked tasks, persistence and permanent deletion regression.
-- No production note was created, edited or deleted for QA. Separate QA data root used.
+## Validation
 
-## Implementation checklist
-
-- [x] Native per-card glass with clear outer panel.
-- [x] Local persisted appearance menu; frosted default.
-- [x] More transparent tint per user feedback.
-- [x] Clear text/editing and transparent Markdown preview.
-- [x] Reduced-transparency and reduced-motion handling.
-- [x] Native visual comparison and relevant tests.
-- [x] Developer ID signature verified and Build 55 installed at /Applications/Zilo.app; installed native note appearance menu checked.
-- [ ] Public notarized distribution: blocked by three S3 multipart upload failures, including proxy retry. No Gatekeeper acceptance or notarization success is claimed for final Build 55. Local signed DMG includes an explicit notarization-status note. Previous notarized Build 54 retained as backup.
-
-Residual manual gaps: direct 280/480pt captures and changing the OS Reduce Transparency setting were not performed; fallback logic was unit-tested. Wallpaper-specific appearance varies with the actual desktop and is not claimed to match the concept poster pixel-for-pixel.
+- Debug build and universal Release archive succeeded.
+- 160 tests passed with zero failures (`tests-delivery.log`), including two-option menu model, legacy preference fallback, accessibility fallback, opacity order, palette composition in light/dark and existing note persistence/hover/link/deletion regression.
+- Native UI: menu options and legacy selection checked; Clear selected; stable expanded editing state captured. A genuine-alpha Clear test was manually confirmed transparent by the user before the final removal of Frosted; that Clear renderer is retained.
+- No production content was edited for QA. Separate QA data root used.
+- Remaining manual gaps: final dark capture and 280/480pt native resizing were not repeated; geometry is unchanged and light/dark palette composition is tested. Desktop-specific appearance naturally varies.
+- Developer ID signing, Apple notarization, notarization-ticket validation and Gatekeeper assessment passed for the final app. Build 56 was installed and its native menu was verified to contain only Solid and Clear. DMG checksum validation passed. Release evidence is in `.release/20261028-notes-transparency56` and `.release/20261028-mac56-delivery`.
 
 final result: passed

@@ -3,26 +3,42 @@ import AppKit
 @testable import OwnList
 
 final class HTMLAndSideNotesTests: XCTestCase {
-    func testNotesGlassFallsBackToSolidAndProtectsEditingContrast() {
-        XCTAssertEqual(SideNotesAppearance(stored: "unknown"),.frosted)
+    func testNotesTransparencyFallsBackToSolidAndProtectsEditingContrast() {
+        XCTAssertEqual(SideNotesAppearance.allCases,[.solid,.clear])
+        XCTAssertEqual(SideNotesAppearance(stored: "unknown"),.solid)
+        XCTAssertEqual(SideNotesAppearance(stored: "frosted"),.solid)
         for style in SideNotesAppearance.allCases {
             for expanded in [false,true] {
                 for editing in [false,true] {
-                    XCTAssertFalse(style.usesGlass(reduceTransparency: true))
+                    XCTAssertFalse(style.usesTransparency(reduceTransparency: true))
                     XCTAssertEqual(style.tintOpacity(expanded: expanded,editing: editing,reduceTransparency: true),1)
                 }
             }
-            XCTAssertEqual(SideNotesAppearance.solid.tintOpacity(expanded: true,editing: false,reduceTransparency: false),1)
-            guard style != .solid else { continue }
-            let folded = style.tintOpacity(expanded: false,editing: false,reduceTransparency: false)
-            let expanded = style.tintOpacity(expanded: true,editing: false,reduceTransparency: false)
-            let editing = style.tintOpacity(expanded: true,editing: true,reduceTransparency: false)
-            XCTAssertLessThan(folded,expanded)
-            XCTAssertLessThan(expanded,editing)
-            XCTAssertGreaterThanOrEqual(editing,0.85)
         }
-        XCTAssertLessThan(SideNotesAppearance.clear.tintOpacity(expanded: true,editing: false,reduceTransparency: false),
-                          SideNotesAppearance.frosted.tintOpacity(expanded: true,editing: false,reduceTransparency: false))
+        XCTAssertEqual(SideNotesAppearance.solid.tintOpacity(expanded: true,editing: false,reduceTransparency: false),1)
+        let folded = SideNotesAppearance.clear.tintOpacity(expanded: false,editing: false,reduceTransparency: false)
+        let expanded = SideNotesAppearance.clear.tintOpacity(expanded: true,editing: false,reduceTransparency: false)
+        let editing = SideNotesAppearance.clear.tintOpacity(expanded: true,editing: true,reduceTransparency: false)
+        XCTAssertEqual(folded,0.5)
+        XCTAssertLessThan(folded,expanded)
+        XCTAssertLessThan(expanded,editing)
+        XCTAssertGreaterThanOrEqual(editing,0.8)
+    }
+    func testTranslucentNotesKeepPaperColorsOverNeutralBackdrop() {
+        for paper in SideNotePaper.allCases {
+            for dark in [false,true] {
+                let target = paper.hex(dark: dark)
+                XCTAssertEqual(SideNotesSurfaceTint.hex(paper: paper,dark: dark,opacity: 1),target)
+                for opacity in [0.5,0.58,0.82,0.86,0.94] {
+                    let tint = SideNotesSurfaceTint.hex(paper: paper,dark: dark,opacity: opacity)
+                    for shift: UInt32 in [0,8,16] {
+                        let background = dark ? 0.0 : 255.0
+                        let composed = Double((tint >> shift) & 255)*opacity + background*(1-opacity)
+                        XCTAssertEqual(composed,Double((target >> shift) & 255),accuracy: 1)
+                    }
+                }
+            }
+        }
     }
     func testLinkedTaskDestinationResolvesContainerAndAncestorsWithoutChangingTasks() throws {
         let list = UUID(); var root = TaskItem(); root.listID = list

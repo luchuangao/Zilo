@@ -11,45 +11,38 @@ extension Store: SideNotesStore {
 
 /// A local appearance preference; note colors and synced content stay unchanged.
 enum SideNotesAppearance: String, CaseIterable, Identifiable {
-    case solid, frosted, clear
+    case solid, clear
     static let preferenceKey = "sideNotesAppearance"
     var id: String { rawValue }
-    init(stored: String) { self = Self(rawValue: stored) ?? .frosted }
+    init(stored: String) { self = Self(rawValue: stored) ?? .solid }
     var title: String {
-        switch self { case .solid: return "纯色"; case .frosted: return "磨砂"; case .clear: return "通透" }
+        switch self { case .solid: return "纯色"; case .clear: return "通透" }
     }
-    func usesGlass(reduceTransparency: Bool) -> Bool { self != .solid && !reduceTransparency }
+    func usesTransparency(reduceTransparency: Bool) -> Bool { self == .clear && !reduceTransparency }
     func tintOpacity(expanded: Bool,editing: Bool,reduceTransparency: Bool) -> Double {
-        guard usesGlass(reduceTransparency: reduceTransparency) else { return 1 }
-        if editing { return 0.85 }
+        guard usesTransparency(reduceTransparency: reduceTransparency) else { return 1 }
+        if editing { return 0.82 }
         switch self {
         case .solid: return 1
-        case .frosted: return expanded ? 0.38 : 0.24
-        case .clear: return expanded ? 0.22 : 0.12
+        case .clear: return expanded ? 0.58 : 0.50
         }
     }
 }
 
-/// Blur only the surface behind each card. Text and controls remain fully opaque.
-private struct NoteGlassMaterial: NSViewRepresentable {
-    var appearance: SideNotesAppearance
-    var dark: Bool
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NoteGlassEffectView()
-        view.blendingMode = .behindWindow; view.state = .active
-        view.wantsLayer = true; view.layer?.cornerRadius = 12; view.layer?.masksToBounds = true
-        updateNSView(view,context: context)
-        return view
+/// Preserve the paper hue over a neutral desktop while allowing other windows
+/// to show through. A plain pastel at half alpha would otherwise wash to white.
+enum SideNotesSurfaceTint {
+    static func hex(paper: SideNotePaper,dark: Bool,opacity: Double) -> UInt32 {
+        let original = paper.hex(dark: dark)
+        guard opacity > 0,opacity < 1 else { return original }
+        let neutral = dark ? 0.0 : 1.0
+        func channel(_ shift: UInt32) -> UInt32 {
+            let value = Double((original >> shift) & 255)/255
+            let adjusted = (value-neutral*(1-opacity))/opacity
+            return UInt32((min(1,max(0,adjusted))*255).rounded())
+        }
+        return (channel(16) << 16) | (channel(8) << 8) | channel(0)
     }
-    func updateNSView(_ view: NSVisualEffectView,context: Context) {
-        let material: NSVisualEffectView.Material = appearance == .clear ? .underWindowBackground : .sidebar
-        if view.material != material { view.material = material }
-        let name: NSAppearance.Name = dark ? .darkAqua : .aqua
-        if view.appearance?.name != name { view.appearance = NSAppearance(named: name) }
-    }
-}
-private final class NoteGlassEffectView: NSVisualEffectView {
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 @MainActor final class SideNotesSelection: ObservableObject {
@@ -363,7 +356,7 @@ struct SideNotesView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var selection: SideNotesSelection
-    @AppStorage(SideNotesAppearance.preferenceKey) private var appearance = SideNotesAppearance.frosted.rawValue
+    @AppStorage(SideNotesAppearance.preferenceKey) private var appearance = SideNotesAppearance.solid.rawValue
     @State private var search = ""
     @State private var trash = false
     @State private var deletingNote: UUID?
@@ -464,7 +457,7 @@ private struct PaperNoteCard<Actions: View>: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @AppStorage(SideNotesAppearance.preferenceKey) private var appearanceValue = SideNotesAppearance.frosted.rawValue
+    @AppStorage(SideNotesAppearance.preferenceKey) private var appearanceValue = SideNotesAppearance.solid.rawValue
     private enum EditingField: Hashable { case title, body }
     @FocusState private var editingField: EditingField?
     @State private var richEditing = false
@@ -487,7 +480,7 @@ private struct PaperNoteCard<Actions: View>: View {
     private var dark: Bool { scheme == .dark }
     private var selected: Bool { selection.selected == note.id }
     private var appearance: SideNotesAppearance { SideNotesAppearance(stored: appearanceValue) }
-    private var glass: Bool { appearance.usesGlass(reduceTransparency: reduceTransparency) }
+    private var translucent: Bool { appearance.usesTransparency(reduceTransparency: reduceTransparency) }
     private var editing: Bool { !folded && (editingField != nil || richEditing) }
     private var tintOpacity: Double { appearance.tintOpacity(expanded: !folded,editing: editing,reduceTransparency: reduceTransparency) }
     var body: some View {
@@ -501,14 +494,12 @@ private struct PaperNoteCard<Actions: View>: View {
             }
         }.padding(12).frame(maxWidth: .infinity,alignment: .leading)
             .background {
-                ZStack {
-                    if glass { NoteGlassMaterial(appearance: appearance,dark: dark) }
-                    paper.color(dark: dark).opacity(tintOpacity)
-                }.allowsHitTesting(false)
+                SideNotePaper.color(SideNotesSurfaceTint.hex(paper: paper,dark: dark,opacity: tintOpacity))
+                    .opacity(tintOpacity).allowsHitTesting(false)
             }
             .clipShape(RoundedRectangle(cornerRadius: 12))
             .overlay {
-                if glass {
+                if translucent {
                     RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(dark ? 0.12 : 0.42),lineWidth: 0.5).allowsHitTesting(false)
                 }
             }
@@ -583,7 +574,7 @@ private struct PaperNoteCard<Actions: View>: View {
         else if task.editingMode == .richText {
             RichTextEditor(text: task.notes,data: task.richText,paperStyle: true,onEditingChanged: { richEditing = $0 }) { text,data in store.updateSideNoteDocument(note.id,text: text,richText: data) }.frame(height: editorHeight(task.notes))
         } else if preview {
-            MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,paperBackground: glass ? nil : paper.hex(dark: dark),compact: true,transparentBackground: glass).frame(height: max(64,editorHeight(task.notes)))
+            MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,paperBackground: translucent ? nil : paper.hex(dark: dark),compact: true,transparentBackground: translucent).frame(height: max(64,editorHeight(task.notes)))
         } else {
             TextEditor(text: Binding(get: { document?.notes ?? "" },set: { store.updateSideNoteDocument(note.id,text: $0) }))
                 .font(.system(size: 13)).scrollContentBackground(.hidden).frame(height: max(64,editorHeight(task.notes))).accessibilityLabel("便签内容").focused($editingField,equals: .body)
