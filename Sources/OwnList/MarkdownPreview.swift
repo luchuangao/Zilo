@@ -141,6 +141,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
     var source: String
     var baseURL: URL?
     var onChangeLanguage: ((String) -> Void)? = nil
+    var onBeginEditing: (() -> Void)? = nil
     var paperBackground: UInt32? = nil
     var compact = false
     var transparentBackground = false
@@ -151,9 +152,14 @@ struct MarkdownPreviewView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.setURLSchemeHandler(context.coordinator,forURLScheme: "zilo-image")
+        if onBeginEditing != nil {
+            config.userContentController.add(context.coordinator,name: "ziloBeginEditing")
+            config.userContentController.addUserScript(WKUserScript(source: Self.editGestureScript,injectionTime: .atDocumentEnd,forMainFrameOnly: true))
+        }
         let view = WKWebView(frame: .zero,configuration: config)
         view.navigationDelegate = context.coordinator
         view.setAccessibilityLabel("Markdown 预览正文")
+        context.coordinator.onBeginEditing = onBeginEditing
         context.coordinator.onChangeLanguage = onChangeLanguage
         context.coordinator.paperBackground = paperBackground
         context.coordinator.compact = compact
@@ -166,15 +172,49 @@ struct MarkdownPreviewView: NSViewRepresentable {
         return view
     }
     func updateNSView(_ view: WKWebView,context: Context) {
+        context.coordinator.onBeginEditing = onBeginEditing
         context.coordinator.onChangeLanguage = onChangeLanguage
         context.coordinator.paperBackground = paperBackground
         context.coordinator.compact = compact
         context.coordinator.transparentBackground = transparentBackground
         context.coordinator.update(source,root: baseURL,dark: colorScheme == .dark,theme: themeID,in: view)
     }
-    final class Coordinator: NSObject,WKNavigationDelegate,WKURLSchemeHandler {
+    static func dismantleNSView(_ view: WKWebView,coordinator: Coordinator) {
+        view.configuration.userContentController.removeScriptMessageHandler(forName: "ziloBeginEditing")
+        coordinator.previewInteraction.cancel()
+        coordinator.onBeginEditing = nil; view.navigationDelegate = nil
+    }
+    static let editGestureScript = #"""
+    function ziloExternalLink(anchor) { return anchor && /^(https?:|mailto:)/i.test(anchor.href); }
+    document.addEventListener('click', function(event) {
+      if (!event.isTrusted || event.button !== 0 || event.detail === 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      var anchor = event.target.closest('a[href]');
+      if (!ziloExternalLink(anchor)) return;
+      event.preventDefault();
+      if (event.detail === 1) window.webkit.messageHandlers.ziloBeginEditing.postMessage({action:'open-link',url:anchor.href});
+    });
+    document.addEventListener('dblclick', function(event) {
+      if (!event.isTrusted || event.target.closest('button,input,select,textarea')) return;
+      var anchor = event.target.closest('a[href]');
+      if (anchor && !ziloExternalLink(anchor)) return;
+      event.preventDefault();
+      window.webkit.messageHandlers.ziloBeginEditing.postMessage({action:'begin-editing'});
+    });
+    """#
+    final class Coordinator: NSObject,WKNavigationDelegate,WKURLSchemeHandler,WKScriptMessageHandler {
         var source: String?; var root: URL?; var dark = false; var theme = ""; var ready = false
         var onChangeLanguage: ((String) -> Void)?
+        let previewInteraction = PreviewEditInteraction()
+        var onBeginEditing: (() -> Void)? {
+            get { previewInteraction.onBeginEditing }
+            set { previewInteraction.onBeginEditing = newValue }
+        }
+        func userContentController(_ userContentController: WKUserContentController,didReceive message: WKScriptMessage) {
+            guard message.name == "ziloBeginEditing",message.frameInfo.isMainFrame,onBeginEditing != nil,
+                  let body = message.body as? [String:String] else { return }
+            if body["action"] == "begin-editing" { previewInteraction.beginEditing() }
+            else if body["action"] == "open-link",let value = body["url"],let url = URL(string: value) { previewInteraction.followLink(url) }
+        }
         var paperBackground: UInt32?
         var compact = false
         var transparentBackground = false

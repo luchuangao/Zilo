@@ -62,7 +62,7 @@ struct TaskWindow: View {
     var body: some View {
         Group {
             if let task {
-                TaskDetailView(selection: $taskID,initialSplitPreview: true)
+                TaskDetailView(selection: $taskID)
             } else {
                 QuietEmptyState(title: "任务不可用",message: "任务可能已删除，请从主窗口选择其他任务。",symbol: "doc")
             }

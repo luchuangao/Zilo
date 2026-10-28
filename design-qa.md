@@ -1,38 +1,38 @@
-# Mac side-note appearance QA — Build 56
+# Mac task preview and double-click editing QA — Build 57
 
-## Final scope
+## Requested behavior
 
-Keep only Solid / 纯色 and Clear / 通透. Frosted was removed at the user's explicit request; existing `frosted` preferences and unknown values resolve to Solid. Clear deliberately shows background content, matching the user's final direction. No note data or mobile palette migration.
+Task text opens in Preview by default. Double-clicking the body switches to Edit and places keyboard focus in the native editor. Existing Edit/Preview and Markdown split-preview controls remain available. The same TaskDetailView default is used by the main sidebar, task windows and calendar detail sheets.
 
-## Visual evidence
+## Implementation
 
-Source: `.release/20261028-notes-transparency56/reference-muted.png` (reported gray appearance), `reference-color.png` (desired existing paper palette).
-Implementation: `clear-delivery.png`, `menu-final.png` in the same directory. Combined source/implementation board: `comparison-delivery.png`, opened and compared.
+- Default preview for Markdown and rich text, including standalone task windows. Rich-text preview uses a selectable read-only native text view rather than converting the stored document.
+- Double-clicks in the Markdown web preview use a trusted, main-frame gesture message; native rich text uses the text-view double-click callback. Neither path rewrites document content.
+- Ordinary web/mail links distinguish single click from double click using the system double-click interval. A double click cancels pending navigation and begins editing. A single click follows the link. Keyboard activation and modified clicks retain normal navigation. Code copy/language controls keep their own behavior.
+- The native editor stays mounted during Markdown preview, retaining selection, undo and input-method state. Editing requests are checked against the selected task before focusing.
+- Preview gesture handlers and delayed link actions are cleaned up when their view is dismantled. Formatting and mind-map commands can explicitly enter editing.
 
-All captures are native macOS windows at 2×. Sources are approximately 640px / 320pt wide; implementation is 640×568px / 320×284pt. No density scaling is needed. The source contains four folded production notes; isolated QA has three different notes and one expanded editor. Content/card count differences are expected; the comparison targets color quality and preserved card styling rather than matching content height. The yellow paper surface provides a shared palette reference. Full board and the 2× title/menu/footer regions were inspected.
+## Evidence
 
-## Findings and fixes
+User reference: `.release/20261028-preview-edit57/reference-task-preview.png` (task preview with links).
+Native captures in the same directory: `markdown-preview.png`, `markdown-edit.png`, `rich-edit.png`, `window-preview.png`. These are window captures at 2× density. Content is isolated QA fixture data, not the user's production tasks. The task is named PromQL in QA but contains simple link paragraphs for the requested interaction test.
 
-- Reported defect: full-strength system material with a very faint colored overlay produced gray, muted paper colors. Fixed by removing native material entirely from Clear and compensating the translucent overlay color for its alpha. Foreground opacity is unchanged.
-- First corrected Clear version used genuine alpha transparency. User confirmed it was transparent, briefly requested background text hidden, then explicitly clarified that Clear may show text and finally removed Frosted. Final implementation follows the final request; no blur remains in Clear.
-- Menu shows exactly Solid and Clear. Native screenshot confirms legacy Frosted selects Solid. Existing paper hues and stable stored color IDs are retained.
-- No actionable P0/P1/P2 differences in the final inspected state.
+Functional UI verification:
 
-## Fidelity surfaces
+1. Selected a Markdown task: Preview selected, source editor hidden.
+2. Double-clicked the rendered first link at its observed screen coordinates: Edit selected, native task body focused; no browser activation interrupted editing.
+3. Entered ASCII text and pasted Chinese content directly after the double click. Content persisted across task changes and rendered after returning to Preview. CUA's non-ASCII keystroke simulation was unreliable, so Chinese input was verified by paste instead of claiming a keyboard-composition test.
+4. Selected a rich-text task: Preview selected and native body read-only. Double-clicked its body: Edit selected and editable body focused.
+5. Switched back to the Markdown task: Preview restored, previously saved content retained.
+6. Opened the task in a standalone window: Preview selected initially. Split Preview could still be selected and displayed source plus rendered content. Returned to Preview normally.
+7. Installed the notarized app: existing restored production task opened with Preview selected. No production content was edited for QA.
 
-- Typography: existing system 14pt semibold title and 13pt editor, clear caret, single-line title truncation. No global opacity on text or controls.
-- Layout: existing 12pt corners, 4pt gaps, compact header/footer preserved; no extra toolbar, titlebar or search. Editing/Preview stays lower-right. No clipped control in captured 320pt state.
-- Colors: Solid uses exact existing opaque palette. Clear uses 50% folded / 58% expanded / 82% editing colored background; neutral-composition correction retains the paper hue. Background affects the final composite naturally. Reduce Transparency returns to opaque paper. Reduce Motion suppresses transitions.
-- Assets: no new raster asset or custom icon. Existing native symbols and controls retained. System material background removed, so it cannot desaturate Clear.
-- Copy: bilingual Solid/Clear labels retained; unused Frosted strings removed. No prompt or implementation terms added to UI.
+## Validation and limits
 
-## Validation
+163 tests passed with zero failures (`tests-verified.log`), including document/selection preservation on edit focus, injected gesture handling for text/links/interactive controls/keyboard actions, delayed single-link navigation and double-click cancellation. Existing document conversion, IME, formatting, persistence and side-note regression suites passed.
 
-- Debug build and universal Release archive succeeded.
-- 160 tests passed with zero failures (`tests-delivery.log`), including two-option menu model, legacy preference fallback, accessibility fallback, opacity order, palette composition in light/dark and existing note persistence/hover/link/deletion regression.
-- Native UI: menu options and legacy selection checked; Clear selected; stable expanded editing state captured. A genuine-alpha Clear test was manually confirmed transparent by the user before the final removal of Frosted; that Clear renderer is retained.
-- No production content was edited for QA. Separate QA data root used.
-- Remaining manual gaps: final dark capture and 280/480pt native resizing were not repeated; geometry is unchanged and light/dark palette composition is tested. Desktop-specific appearance naturally varies.
-- Developer ID signing, Apple notarization, notarization-ticket validation and Gatekeeper assessment passed for the final app. Build 56 was installed and its native menu was verified to contain only Solid and Clear. DMG checksum validation passed. Release evidence is in `.release/20261028-notes-transparency56` and `.release/20261028-mac56-delivery`.
+Debug and universal Release archive succeeded. Developer ID signing, Apple notarization, ticket validation and Gatekeeper assessment passed. Build 57 installed at `/Applications/Zilo.app`; previous Build 56 preserved. DMG checksum validation recorded in release logs.
+
+The calendar sheet uses the same default TaskDetailView implementation but was not opened separately in this UI pass. Existing typography, spacing, colors, icons and content layout were preserved; this change alters presentation state and gestures, not the visual design. Mobile behavior was not changed by this Mac request.
 
 final result: passed

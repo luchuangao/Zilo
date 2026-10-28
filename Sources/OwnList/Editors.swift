@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 struct TaskDetailView: View {
     var selection: Binding<UUID?>? = nil
-    var startInPreview = false
+    var startInPreview = true
     var initialSplitPreview = false
     @AppStorage("accent") private var applicationTheme = "blue"
     @EnvironmentObject var store: Store
@@ -19,7 +19,7 @@ struct TaskDetailView: View {
     @State private var showFormatting = false
     @State private var showChecks = false
     @State private var showChildren = false
-    @State private var previewMarkdown = false
+    @State private var previewDocument = true
     @State private var previewSidebar = false
     @State private var bodyHeight: CGFloat = 26
     @State private var hoveredCheck: UUID?
@@ -52,7 +52,7 @@ struct TaskDetailView: View {
         Group {
             if let task {
                 GeometryReader { geometry in
-                    detailContent(task,documentHeight: max(220,geometry.size.height - (showFormatting && !previewMarkdown ? 270 : 225)))
+                    detailContent(task,documentHeight: max(220,geometry.size.height - (showFormatting && !previewDocument ? 270 : 225)))
                         .frame(minWidth: 300,maxWidth: .infinity,maxHeight: .infinity)
                 }
                 .buttonStyle(.plain)
@@ -72,7 +72,7 @@ struct TaskDetailView: View {
         showDate = false; showOrganization = false; showChecks = false; showChildren = false; showLink = false
         bodyHeight = 26; hoveredCheck = nil
         previewSidebar = initialSplitPreview && task?.editingMode == .markdown
-        previewMarkdown = !previewSidebar && startInPreview && task?.editingMode == .markdown
+        previewDocument = !previewSidebar && startInPreview
     }
     func detailContent(_ task: TaskItem,documentHeight: CGFloat) -> some View {
         VStack(spacing: 0) {
@@ -97,7 +97,7 @@ struct TaskDetailView: View {
                 }
                 .onChange(of: focusedEntry) { _,entry in if let entry { reader.scrollTo(entry,anchor: .bottom) } }
             }.id(task.id)
-            if showFormatting && !previewMarkdown { formattingBar(task).padding(.horizontal,20).padding(.bottom,12) }
+            if showFormatting && !previewDocument { formattingBar(task).padding(.horizontal,20).padding(.bottom,12) }
             footer(task)
         }
     }
@@ -106,13 +106,27 @@ struct TaskDetailView: View {
         document.editor?.unmarkText(); document.editor?.didChangeText()
         guard var current = store.tasks.first(where: { $0.id == id }) else { return }
         do { TaskDocument.switchMode(&current,to: mode,baseURL: store.persistence.root); try store.externalizeDocumentImages(&current); store.save(current) } catch { store.error = error.localizedDescription }
-        document.activeFormats = []; previewMarkdown = false; previewSidebar = false
+        document.activeFormats = []; previewDocument = false; previewSidebar = false
     }
     var previewSelection: Binding<Int> {
-        Binding(get: { previewSidebar ? 2 : previewMarkdown ? 1 : 0 },set: { value in
-            commitDocument()
-            previewMarkdown = value == 1; previewSidebar = value == 2
+        Binding(get: { previewSidebar ? 2 : previewDocument ? 1 : 0 },set: { value in
+            if value == 0,let id = selectedID { beginBodyEditing(taskID: id) }
+            else {
+                commitDocument()
+                previewDocument = value == 1; previewSidebar = value == 2
+            }
         })
+    }
+    func beginBodyEditing(taskID: UUID) {
+        guard selectedID == taskID else { return }
+        previewDocument = false; previewSidebar = false
+        document.editor?.isEditable = true
+        // The native editor stays mounted behind Markdown preview, preserving
+        // undo, selection and input-method state during the mode change.
+        DispatchQueue.main.async {
+            guard selectedID == taskID else { return }
+            document.beginEditing()
+        }
     }
     func beginEntry(_ entry: String) {
         if entry == "check" { showChecks = true } else { showChildren = true }
@@ -138,16 +152,16 @@ struct TaskDetailView: View {
     }
     @ViewBuilder func documentBody(_ task: TaskItem,height: CGFloat) -> some View {
         VStack(alignment: .leading,spacing: 12) {
-            if task.editingMode == .markdown {
-                HStack(spacing: 10) {
+            HStack(spacing: 10) {
                     Spacer()
                     Picker("正文编辑方式",selection: previewSelection) {
                         Text("编辑").tag(0)
                         Text("预览").tag(1)
-                        Image(systemName: "rectangle.split.2x1").tag(2).help("并排预览").accessibilityLabel("并排预览")
-                    }.labelsHidden().pickerStyle(.segmented).frame(width: 174)
+                        if task.editingMode == .markdown {
+                            Image(systemName: "rectangle.split.2x1").tag(2).help("并排预览").accessibilityLabel("并排预览")
+                        }
+                    }.labelsHidden().pickerStyle(.segmented).frame(width: task.editingMode == .markdown ? 174 : 132)
                 }
-            }
             HStack(alignment: .top,spacing: 0) {
             ZStack(alignment: .topLeading) {
             HStack(alignment: .top,spacing: 6) {
@@ -163,20 +177,23 @@ struct TaskDetailView: View {
                         Button(format.title,systemImage: format.symbol) { applyFormat(format) }
                     }
                 } label: { Image(systemName: "plus").foregroundStyle(.tertiary).frame(width: 14,height: 24) }
-                    .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.gray).fixedSize().help("插入内容").accessibilityLabel("插入内容")
-                DetailDocumentEditor(text: task.notes,data: task.richText,rich: task.editingMode == .richText,scrolling: true,onError: { store.error = $0 },imageReference: { try store.saveDocumentImage($0,name: $1,to: task.id) },baseURL: store.persistence.root,controller: document,height: $bodyHeight) { text,data in
+                    .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.gray).fixedSize().help("插入内容").accessibilityLabel("插入内容").opacity(previewDocument ? 0 : 1).allowsHitTesting(!previewDocument).accessibilityHidden(previewDocument)
+                DetailDocumentEditor(text: task.notes,data: task.richText,rich: task.editingMode == .richText,editable: !previewDocument,scrolling: true,onBeginEditing: { beginBodyEditing(taskID: task.id) },onError: { store.error = $0 },imageReference: { try store.saveDocumentImage($0,name: $1,to: task.id) },baseURL: store.persistence.root,controller: document,height: $bodyHeight) { text,data in
                     store.mutate(task.id) { $0.notes = text; $0.richText = data }
                 }.id(task.editingMode).frame(height: height).overlay(alignment: .topLeading) {
-                    if task.notes.isEmpty { Text(task.editingMode == .markdown ? "输入 Markdown 源码…" : "输入内容，支持 Markdown 快捷语法…").font(.system(size: 14)).foregroundStyle(.tertiary).padding(.top,3).allowsHitTesting(false) }
+                    if task.notes.isEmpty { Text(previewDocument ? "双击编辑正文" : task.editingMode == .markdown ? "输入 Markdown 源码…" : "输入内容，支持 Markdown 快捷语法…").font(.system(size: 14)).foregroundStyle(.tertiary).padding(.top,3).allowsHitTesting(false) }
                 }
-            }.padding(.leading,-20).opacity(previewMarkdown ? 0 : 1).allowsHitTesting(!previewMarkdown).accessibilityHidden(previewMarkdown)
-            if task.editingMode == .markdown && previewMarkdown {
-                MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,onChangeLanguage: { source in store.mutate(task.id) { $0.notes = source } }).frame(height: height).accessibilityLabel("Markdown 预览")
+            }.padding(.leading,-20).opacity(previewDocument && task.editingMode == .markdown ? 0 : 1)
+                .allowsHitTesting(!previewDocument || task.editingMode == .richText)
+                .accessibilityHidden(previewDocument && task.editingMode == .markdown)
+            if task.editingMode == .markdown && previewDocument {
+                MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,onChangeLanguage: { source in store.mutate(task.id) { $0.notes = source } },onBeginEditing: { beginBodyEditing(taskID: task.id) })
+                    .frame(height: height).accessibilityLabel("Markdown 预览").help("双击编辑正文")
             }
             }.frame(maxWidth: .infinity,alignment: .topLeading)
             if task.editingMode == .markdown && previewSidebar {
                 Divider().padding(.horizontal,16).frame(height: height)
-                MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,onChangeLanguage: { source in store.mutate(task.id) { $0.notes = source } })
+                MarkdownPreviewView(source: task.notes,baseURL: store.persistence.root,onChangeLanguage: { source in store.mutate(task.id) { $0.notes = source } },onBeginEditing: { beginBodyEditing(taskID: task.id) })
                     .frame(maxWidth: .infinity).frame(height: height).accessibilityLabel("Markdown 侧栏预览")
             }
             }
@@ -282,7 +299,7 @@ struct TaskDetailView: View {
             } label: { HStack(spacing: 6) { Image(systemName: "tray.and.arrow.down"); Text(store.lists.first { $0.id == task.listID }?.name ?? ZiloLanguage.text("收集箱")).lineLimit(1) } }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.primary).fixedSize().accessibilityLabel("所属清单")
             Spacer()
-            Button { if previewMarkdown { previewSelection.wrappedValue = 0 }; showFormatting.toggle() } label: { Text("A").font(.system(size: 18)).underline().frame(width: 28,height: 28).background(showFormatting ? Color.secondary.opacity(0.1) : .clear,in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel("格式工具栏").help("格式工具栏")
+            Button { if previewDocument { previewSelection.wrappedValue = 0 }; showFormatting.toggle() } label: { Text("A").font(.system(size: 18)).underline().frame(width: 28,height: 28).background(showFormatting ? Color.secondary.opacity(0.1) : .clear,in: RoundedRectangle(cornerRadius: 7)) }.accessibilityLabel("格式工具栏").help("格式工具栏")
             Menu { moreActions(task) } label: { Image(systemName: "ellipsis").font(.system(size: 18)).frame(width: 32,height: 32).contentShape(Rectangle()) }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).tint(.primary).fixedSize().accessibilityLabel("任务更多操作").help("任务更多操作")
         }.foregroundStyle(.secondary).padding(.horizontal,24).padding(.vertical,12)
@@ -311,6 +328,7 @@ struct TaskDetailView: View {
         Button { insertImages() } label: { Image(systemName: "photo").frame(width: 28,height: 28) }.help("插入图片").accessibilityLabel("插入图片")
     }
     func beginMindMap() {
+        if previewDocument,let id = selectedID { beginBodyEditing(taskID: id) }
         mindMapOutline = MindMapDocument.example; mindMapRange = nil
         guard let editor = document.editor else { showMindMap = true; return }
         editor.unmarkText(); editor.didChangeText()
@@ -379,7 +397,7 @@ struct TaskDetailView: View {
         Picker("正文编辑方式",selection: Binding(get: { task.editingMode },set: { changeMode($0) })) {
             ForEach(DocumentEditingMode.allCases,id: \.self) { mode in Text(mode.title).tag(mode) }
         }
-        if task.editingMode == .richText { Button("字体设置") { document.editor?.window?.makeFirstResponder(document.editor); NSFontManager.shared.orderFrontFontPanel(nil) } }
+        if task.editingMode == .richText { Button("字体设置") { beginBodyEditing(taskID: task.id); NSFontManager.shared.orderFrontFontPanel(nil) } }
         Divider()
         Button("添加子任务",systemImage: "arrow.turn.down.right") { beginEntry("child") }
         if task.parentID != nil {

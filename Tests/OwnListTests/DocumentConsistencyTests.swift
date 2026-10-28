@@ -1,9 +1,68 @@
 import XCTest
 import AppKit
 import PDFKit
+import JavaScriptCore
 @testable import OwnList
 
 final class DocumentConsistencyTests: XCTestCase {
+    @MainActor func testPreviewEditFocusPreservesDocumentAndSelection() throws {
+        let editor = DocumentTextView(frame: NSRect(x: 0,y: 0,width: 400,height: 200))
+        editor.string = "预览切换后直接继续输入"; editor.isEditable = false
+        editor.setSelectedRange(NSRange(location: 5,length: 0))
+        let original = NSAttributedString(attributedString: editor.textStorage!)
+        let window = NSWindow(contentRect: editor.frame,styleMask: .borderless,backing: .buffered,defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = editor
+        defer { window.close() }
+        let controller = DocumentEditorController(); controller.editor = editor
+        XCTAssertTrue(controller.beginEditing())
+        XCTAssertTrue(editor.isEditable)
+        XCTAssertTrue(window.firstResponder === editor)
+        XCTAssertEqual(editor.selectedRange(),NSRange(location: 5,length: 0))
+        XCTAssertEqual(editor.textStorage!,original)
+        XCTAssertFalse(DocumentEditorController().beginEditing())
+    }
+    @MainActor func testPreviewDoubleClickPreservesInteractiveControls() throws {
+        let context = try XCTUnwrap(JSContext())
+        context.evaluateScript("""
+        var posted = [], prevented = 0, handlers = {};
+        var document = {addEventListener:function(name,fn){handlers[name]=fn;}};
+        var window = {webkit:{messageHandlers:{ziloBeginEditing:{postMessage:function(value){posted.push(value);}}}}};
+        function trigger(type,tag,href,detail,trusted) {
+          handlers[type]({isTrusted:trusted,button:0,detail:detail,target:{closest:function(selector){
+            if(selector==='a[href]')return tag==='a'?{href:href}:null;
+            return tag==='button'?{}:null;
+          }},preventDefault:function(){prevented++;}});
+        }
+        """)
+        context.evaluateScript(MarkdownPreviewView.editGestureScript)
+        XCTAssertNil(context.exception)
+        context.evaluateScript("trigger('dblclick','button','',2,true);trigger('dblclick','a','zilo-copy:0',2,true);trigger('dblclick','p','',2,false);trigger('click','a','https://example.com',0,true);")
+        XCTAssertEqual(context.evaluateScript("posted.length")?.toInt32(),0)
+        context.evaluateScript("trigger('dblclick','p','',2,true);")
+        XCTAssertEqual(context.evaluateScript("posted[0].action")?.toString(),"begin-editing")
+        context.evaluateScript("trigger('click','a','https://example.com',1,true);trigger('click','a','https://example.com',2,true);trigger('dblclick','a','https://example.com',2,true);")
+        XCTAssertEqual(context.evaluateScript("posted.length")?.toInt32(),3)
+        XCTAssertEqual(context.evaluateScript("posted[1].action")?.toString(),"open-link")
+        XCTAssertEqual(context.evaluateScript("posted[2].action")?.toString(),"begin-editing")
+        XCTAssertNil(context.exception)
+    }
+    @MainActor func testPreviewDoubleClickCancelsLinkButSingleClickFollowsIt() async throws {
+        let interaction = PreviewEditInteraction(); interaction.linkDelay = 0.02
+        var opened: [URL] = []; var editing = 0
+        interaction.openLink = { opened.append($0) }; interaction.onBeginEditing = { editing += 1 }
+        let url = try XCTUnwrap(URL(string: "https://example.com"))
+        XCTAssertTrue(interaction.followLink(url))
+        interaction.beginEditing()
+        try await Task.sleep(nanoseconds: 80_000_000)
+        XCTAssertTrue(opened.isEmpty); XCTAssertEqual(editing,1)
+        XCTAssertTrue(interaction.followLink(url))
+        try await Task.sleep(nanoseconds: 80_000_000)
+        XCTAssertEqual(opened,[url])
+        XCTAssertFalse(interaction.followLink(try XCTUnwrap(URL(string: "javascript:alert(1)"))))
+        interaction.followLink(url); interaction.cancel()
+        try await Task.sleep(nanoseconds: 80_000_000)
+        XCTAssertEqual(opened,[url])
+    }
     @MainActor func testContextMenuHitRegionCannotExtendIntoAdjacentTaskRows() {
         let host = NSView(frame: NSRect(x: 0,y: 0,width: 600,height: 800))
         let child = TaskRowContextSurface.ContextSurface(frame: NSRect(x: 24,y: 100,width: 400,height: 40))

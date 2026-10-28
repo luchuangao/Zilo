@@ -106,10 +106,37 @@ enum DocumentLink {
     }
 }
 
+/// Wait for the system double-click interval before following preview links,
+/// so a second click can enter editing without also opening a browser.
+final class PreviewEditInteraction {
+    var onBeginEditing: (() -> Void)?
+    var openLink: (URL) -> Void = { NSWorkspace.shared.open($0) }
+    var linkDelay = NSEvent.doubleClickInterval
+    private var pendingLink: DispatchWorkItem?
+    @discardableResult func followLink(_ url: URL) -> Bool {
+        guard onBeginEditing != nil,["http","https","mailto"].contains(url.scheme?.lowercased() ?? "") else { return false }
+        cancel()
+        let work = DispatchWorkItem { [weak self] in self?.openLink(url) }
+        pendingLink = work; DispatchQueue.main.asyncAfter(deadline: .now()+linkDelay,execute: work)
+        return true
+    }
+    func beginEditing() { cancel(); onBeginEditing?() }
+    func cancel() { pendingLink?.cancel(); pendingLink = nil }
+    deinit { pendingLink?.cancel() }
+}
+
 /// Commands target this document's text view, including after a toolbar click changes focus.
 final class DocumentEditorController: ObservableObject {
     weak var editor: NSTextView?
     var rich = false
+    @discardableResult func beginEditing() -> Bool {
+        guard let editor,let window = editor.window else { return false }
+        (editor as? DocumentTextView)?.previewInteraction.cancel()
+        editor.isEditable = true
+        let focused = window.makeFirstResponder(editor)
+        if focused { editor.scrollRangeToVisible(editor.selectedRange()) }
+        return focused
+    }
     func insertImages(_ urls: [URL]) throws {
         guard let editor = editor as? DocumentTextView else { return }
         editor.window?.makeFirstResponder(editor)
@@ -234,6 +261,7 @@ struct DetailDocumentEditor: NSViewRepresentable {
     var text: String; var data: Data?; var rich: Bool
     var editable = true
     var scrolling = false
+    var onBeginEditing: (() -> Void)? = nil
     var accessibilityLabel = "任务正文"
     var onError: (String) -> Void = { _ in }
     var imageReference: ((Data,String) throws -> String)?
@@ -246,6 +274,7 @@ struct DetailDocumentEditor: NSViewRepresentable {
         let scroll = DocumentScrollView()
         let editor = DocumentTextView()
         editor.isEditable = editable; editor.isSelectable = true; editor.allowsUndo = true; editor.importsGraphics = rich
+        editor.onPreviewDoubleClick = onBeginEditing
         editor.transferError = onError; editor.imageReference = imageReference; editor.documentBaseURL = baseURL
         editor.drawsBackground = false; editor.isHorizontallyResizable = false; editor.isVerticallyResizable = true
         editor.autoresizingMask = [.width]; editor.textContainerInset = NSSize(width: 0,height: 3)
@@ -301,6 +330,7 @@ struct DetailDocumentEditor: NSViewRepresentable {
         func synchronize(_ view: DocumentScrollView) {
             guard let editor = view.documentView as? NSTextView else { return }
             parent.controller.editor = editor
+            (editor as? DocumentTextView)?.onPreviewDoubleClick = parent.onBeginEditing
             (editor as? DocumentTextView)?.transferError = parent.onError
             (editor as? DocumentTextView)?.imageReference = parent.imageReference
             (editor as? DocumentTextView)?.documentBaseURL = parent.baseURL
@@ -327,6 +357,11 @@ struct DetailDocumentEditor: NSViewRepresentable {
         func resize(_ value: CGFloat) {
             guard abs(parent.height - value) > 1 else { return }
             DispatchQueue.main.async { [weak self] in if let self, abs(self.parent.height - value) > 1 { self.parent.height = value } }
+        }
+        func textView(_ textView: NSTextView,clickedOnLink link: Any,at charIndex: Int) -> Bool {
+            guard !textView.isEditable,let editor = textView as? DocumentTextView,
+                  let url = (link as? URL) ?? (link as? String).flatMap({ URL(string: $0) }) else { return false }
+            return editor.previewInteraction.followLink(url)
         }
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !applyingModel, let editor = notification.object as? NSTextView, !editor.hasMarkedText() else { return }
@@ -385,6 +420,11 @@ struct DetailDocumentEditor: NSViewRepresentable {
 /// Code blocks use ordinary RTF paragraph attributes, so their boundaries survive
 /// app restarts, backups and sync. Paint the panel separately for light/dark mode.
 class DocumentTextView: StyledDocumentTextView {
+    let previewInteraction = PreviewEditInteraction()
+    var onPreviewDoubleClick: (() -> Void)? {
+        get { previewInteraction.onBeginEditing }
+        set { previewInteraction.onBeginEditing = newValue }
+    }
     var compositionDidEnd: ((DocumentTextView) -> Void)?
     override func insertText(_ insertString: Any,replacementRange: NSRange) {
         let wasComposing = hasMarkedText()
@@ -481,6 +521,9 @@ class DocumentTextView: StyledDocumentTextView {
         for (_,_,rect) in languageButtons() { addCursorRect(rect,cursor: .pointingHand) }
     }
     override func mouseDown(with event: NSEvent) {
+        if !isEditable,event.clickCount == 2,onPreviewDoubleClick != nil {
+            previewInteraction.beginEditing(); return
+        }
         let point = convert(event.locationInWindow,from: nil)
         if isEditable,let (block,language,rect) = languageButtons().first(where: { $0.2.contains(point) }) {
             CodeLanguageMenu.show(current: language,at: NSPoint(x: rect.minX,y: rect.maxY),in: self) { [weak self] selected in
