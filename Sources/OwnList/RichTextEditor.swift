@@ -83,6 +83,41 @@ enum DocumentFormat: String, CaseIterable {
     }
 }
 
+/// Shared by the menu and Settings so the displayed keys match the bindings.
+enum DocumentShortcut: String, CaseIterable, Identifiable {
+    case bold, italic, link, heading1, heading2, heading3, heading4, heading5, heading6, find, findNext, findPrevious, togglePreview
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .bold: return "粗体"; case .italic: return "斜体"; case .link: return "插入链接"
+        case .heading1: return "一级标题"; case .heading2: return "二级标题"; case .heading3: return "三级标题"
+        case .heading4: return "四级标题"; case .heading5: return "五级标题"; case .heading6: return "六级标题"
+        case .find: return "查找正文"; case .findNext: return "下一个匹配"; case .findPrevious: return "上一个匹配"
+        case .togglePreview: return "切换编辑与预览"
+        }
+    }
+    var key: Character {
+        if let level = headingLevel { return Character(String(level)) }
+        switch self { case .bold: return "b"; case .italic: return "i"; case .link: return "k"; case .find: return "f"; case .findNext,.findPrevious: return "g"; default: return "m" }
+    }
+    var shifted: Bool { self == .findPrevious || self == .togglePreview }
+    var modifiers: EventModifiers { shifted ? [.command,.shift] : .command }
+    var display: String { (shifted ? "⇧ ⌘ " : "⌘ ") + String(key).uppercased() }
+    var headingLevel: Int? { rawValue.hasPrefix("heading") ? Int(rawValue.dropFirst(7)) : nil }
+    var isFormatting: Bool { self == .bold || self == .italic || self == .link || headingLevel != nil }
+}
+struct DocumentShortcutActions {
+    var enabled: Bool
+    var perform: (DocumentShortcut) -> Void
+}
+private struct DocumentShortcutFocusKey: FocusedValueKey { typealias Value = DocumentShortcutActions }
+extension FocusedValues {
+    var documentShortcuts: DocumentShortcutActions? {
+        get { self[DocumentShortcutFocusKey.self] }
+        set { self[DocumentShortcutFocusKey.self] = newValue }
+    }
+}
+
 enum DocumentLink {
     static func url(_ address: String) -> URL? {
         let value = address.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -136,6 +171,27 @@ final class DocumentEditorController: ObservableObject {
         let focused = window.makeFirstResponder(editor)
         if focused { editor.scrollRangeToVisible(editor.selectedRange()) }
         return focused
+    }
+    func find(_ action: NSTextFinder.Action = .showFindInterface) {
+        guard beginEditing(),let editor else { return }
+        let sender = NSMenuItem(); sender.tag = Int(action.rawValue)
+        editor.performFindPanelAction(sender)
+    }
+    func setHeading(_ level: Int) {
+        guard (1...6).contains(level),let editor,!editor.hasMarkedText() else { return }
+        if !rich { MarkdownSourceEditing.setHeading(level,in: editor) }
+        else {
+            let selection = editor.selectedRange(),text = editor.string as NSString
+            let range = text.lineRange(for: selection)
+            let font = NSFont.boldSystemFont(ofSize: [24.0,20,18,17,16,15][level-1])
+            if range.length > 0,let storage = editor.textStorage {
+                let block = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: range))
+                block.addAttribute(.font,value: font,range: NSRange(location: 0,length: block.length))
+                editor.insertText(block,replacementRange: range); editor.setSelectedRange(selection)
+            }
+            editor.typingAttributes[.font] = font
+        }
+        refreshSelection()
     }
     func insertImages(_ urls: [URL]) throws {
         guard let editor = editor as? DocumentTextView else { return }
@@ -279,6 +335,7 @@ struct DetailDocumentEditor: NSViewRepresentable {
         editor.drawsBackground = false; editor.isHorizontallyResizable = false; editor.isVerticallyResizable = true
         editor.autoresizingMask = [.width]; editor.textContainerInset = NSSize(width: 0,height: 3)
         editor.textContainer?.lineFragmentPadding = 0; editor.textContainer?.widthTracksTextView = true
+        editor.usesFindBar = true; editor.isIncrementalSearchingEnabled = true
         editor.isAutomaticQuoteSubstitutionEnabled = false; editor.isAutomaticDashSubstitutionEnabled = false
         editor.setAccessibilityLabel(accessibilityLabel)
         scroll.documentView = editor
@@ -963,6 +1020,29 @@ enum MarkdownSourceEditing {
         editor.insertText(replacement,replacementRange: range)
         editor.setSelectedRange(NSRange(location: start,length: max(0,end - start)))
     }
+    static func setHeading(_ level: Int,in editor: NSTextView) {
+        guard (1...6).contains(level),!editor.isRichText,!editor.hasMarkedText() else { return }
+        let selection = editor.selectedRange(),text = editor.string as NSString
+        let range = linesRange(selection,in: text),block = text.substring(with: range)
+        var lines = block.components(separatedBy: "\n")
+        let finalEmpty = lines.last == "" && lines.count > 1
+        if finalEmpty { lines.removeLast() }
+        let replacement = lines.map { line -> String in
+            let indent = String(line.prefix { $0 == " " || $0 == "\t" })
+            let body = String(line.dropFirst(indent.count)).replacingOccurrences(of: #"^#{1,6}[ \t]+"#,with: "",options: .regularExpression)
+            return indent + String(repeating: "#",count: level) + " " + body
+        }.joined(separator: "\n") + (finalEmpty ? "\n" : "")
+        // Snapshot prefix offsets before insertText mutates the backing string.
+        let prefix = match(#"^[ \t]*(?:#{1,6}[ \t]+)?"#,block)?.range.length ?? 0
+        let indent = block.prefix { $0 == " " || $0 == "\t" }.utf16.count
+        let offset = max(0,selection.location-range.location-prefix)
+        editor.insertText(replacement,replacementRange: range)
+        if selection.length > 0 { editor.setSelectedRange(NSRange(location: range.location,length: replacement.utf16.count)) }
+        else {
+            let caret = min(range.location+replacement.utf16.count,range.location+indent+level+1+offset)
+            editor.setSelectedRange(NSRange(location: caret,length: 0))
+        }
+    }
     static func apply(_ format: DocumentFormat,in editor: NSTextView) {
         guard !editor.isRichText,!editor.hasMarkedText(),format != .underline else { return }
         let text = editor.string as NSString,selection = editor.selectedRange()
@@ -1004,7 +1084,7 @@ enum MarkdownSourceEditing {
                 let longest = selected.components(separatedBy: CharacterSet(charactersIn: "`" ).inverted).map(\.count).max() ?? 0
                 wrapper = String(repeating: "`",count: max(1,longest + 1))
             }
-            let toggled = format != .code && selected.hasPrefix(wrapper) && selected.hasSuffix(wrapper) && selected.utf16.count >= wrapper.utf16.count * 2
+            let toggled = format != .code && selected.hasPrefix(wrapper) && selected.hasSuffix(wrapper) && selected.utf16.count >= wrapper.utf16.count * 2 && (format != .italic || !selected.hasPrefix("**") || selected.hasPrefix("***"))
             let padding = format == .code && (selected.hasPrefix("`") || selected.hasSuffix("`") || (selected.hasPrefix(" ") && selected.hasSuffix(" ") && !selected.trimmingCharacters(in: .whitespaces).isEmpty)) ? " " : ""
             replacement = toggled ? String(selected.dropFirst(wrapper.count).dropLast(wrapper.count)) : wrapper + padding + selected + padding + wrapper
             caretOffset = wrapper.utf16.count

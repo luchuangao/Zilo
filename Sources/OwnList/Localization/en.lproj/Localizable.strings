@@ -898,3 +898,61 @@
 "通透" = "Clear";
 
 "双击编辑正文" = "Double-click to edit text";
+
+"一级标题" = "Heading 1";
+
+"二级标题" = "Heading 2";
+
+"三级标题" = "Heading 3";
+
+"四级标题" = "Heading 4";
+
+"五级标题" = "Heading 5";
+
+"六级标题" = "Heading 6";
+
+"查找正文" = "Find in document";
+
+"下一个匹配" = "Next match";
+
+"上一个匹配" = "Previous match";
+
+"切换编辑与预览" = "Toggle edit and preview";
+
+"应用快捷键" = "App shortcuts";
+
+"任务正文快捷键" = "Task document shortcuts";
+
+"文档快捷键用于当前窗口的任务正文；查找会打开正文编辑模式。" = "Document shortcuts apply to the task in the current window. Find opens the document editor.";
+
+"文本编辑" = "Text editing";
+
+"复制 / 剪切 / 粘贴" = "Copy / Cut / Paste";
+
+"全选正文" = "Select all text";
+
+"行首 / 行尾" = "Start / End of line";
+
+"文档开头 / 结尾" = "Start / End of document";
+
+"按词移动光标" = "Move by word";
+
+"移动时选中文字" = "Select while moving";
+
+"⇧ + 方向快捷键" = "⇧ + navigation shortcut";
+
+"删除到行首" = "Delete to start of line";
+
+"删除前一个词" = "Delete previous word";
+
+"Markdown 列表与任务" = "Markdown lists and tasks";
+
+"继续列表 / 空项退出" = "Continue list / Exit empty item";
+
+"预览进入编辑" = "Start editing preview";
+
+"双击正文" = "Double-click text";
+
+"⇧ 回车" = "⇧ Return";
+
+"Tab / ⇧ Tab" = "Tab / ⇧ Tab";

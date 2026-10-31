@@ -240,15 +240,40 @@ struct SettingsView: View {
                 settingToggle("全局快速添加",$quickEnabled).onChange(of: quickEnabled) { _,_ in DesktopBridge.registerHotkey() }
                 ShortcutRecorder().padding(.horizontal,16).padding(.bottom,18).disabled(!quickEnabled)
             }
+            sectionTitle("应用快捷键")
             SettingsCard {
                 shortcutRow("快速添加任务","⌘ N")
                 shortcutRow("新建清单","⇧ ⌘ L")
-                shortcutRow("搜索任务","⌘ F")
+                shortcutRow("搜索任务","⇧ ⌘ F")
+                shortcutRow("桌面便签","⌥ ⌘ N")
                 shortcutRow("打开设置","⌘ ,")
-                shortcutRow("撤销 / 重做","⌘ Z / ⇧ ⌘ Z")
             }
-            sectionTitle("编辑任务与文档")
-            SettingsCard { shortcutRow("保存任务名称","回车"); shortcutRow("取消名称修改","Esc"); shortcutRow("列表内换行","⇧ 回车"); shortcutRow("缩进 / 减少缩进","Tab / ⇧ Tab") }
+            sectionTitle("任务正文快捷键")
+            note("文档快捷键用于当前窗口的任务正文；查找会打开正文编辑模式。")
+            SettingsCard {
+                ForEach(DocumentShortcut.allCases) { shortcut in shortcutRow(shortcut.title,shortcut.display) }
+            }
+            sectionTitle("文本编辑")
+            SettingsCard {
+                shortcutRow("撤销 / 重做","⌘ Z / ⇧ ⌘ Z")
+                shortcutRow("复制 / 剪切 / 粘贴","⌘ C / ⌘ X / ⌘ V")
+                shortcutRow("全选正文","⌘ A")
+                shortcutRow("行首 / 行尾","⌘ ← / ⌘ →")
+                shortcutRow("文档开头 / 结尾","⌘ ↑ / ⌘ ↓")
+                shortcutRow("按词移动光标","⌥ ← / ⌥ →")
+                shortcutRow("移动时选中文字","⇧ + 方向快捷键")
+                shortcutRow("删除到行首","⌘ Delete")
+                shortcutRow("删除前一个词","⌥ Delete")
+            }
+            sectionTitle("Markdown 列表与任务")
+            SettingsCard {
+                shortcutRow("保存任务名称","回车")
+                shortcutRow("取消名称修改","Esc")
+                shortcutRow("继续列表 / 空项退出","回车")
+                shortcutRow("列表内换行","⇧ 回车")
+                shortcutRow("缩进 / 减少缩进","Tab / ⇧ Tab")
+                shortcutRow("预览进入编辑","双击正文")
+            }
         }
     }
     var aboutSettings: some View {
@@ -265,7 +290,7 @@ struct SettingsView: View {
     func reminderPicker(_ title: String,_ binding: Binding<Double>) -> some View {
         SettingsRow(title + "默认提醒") { SettingsValuePicker(title + "默认提醒",selection: binding,choices: [("无",-1.0),("准时",0.0),("提前 5 分钟",300.0),("提前 15 分钟",900.0),("提前 30 分钟",1800.0),("提前 1 小时",3600.0),("提前 1 天",86400.0)]) }
     }
-    func shortcutRow(_ title: String,_ shortcut: String) -> some View { SettingsRow(title) { Text(shortcut).font(.system(size: 13)).foregroundStyle(ListTheme.secondary) } }
+    func shortcutRow(_ title: String,_ shortcut: String) -> some View { SettingsRow(title) { Text(LocalizedStringKey(shortcut)).font(.system(size: 13)).foregroundStyle(ListTheme.secondary) } }
     func sectionTitle(_ title: String) -> some View { Text(LocalizedStringKey(title)).font(.system(size: 15,weight: .semibold)).padding(.top,6) }
     func note(_ text: String) -> some View { Text(LocalizedStringKey(text)).font(.system(size: 12)).foregroundStyle(ListTheme.secondary).lineSpacing(3).frame(maxWidth: .infinity,alignment: .leading).padding(.horizontal,16).padding(.top,2).padding(.bottom,8) }
     @ViewBuilder var feedback: some View { if !status.isEmpty { Text(ZiloLanguage.status(status)).font(.system(size: 12)).foregroundStyle(ListTheme.secondary).textSelection(.enabled) } }

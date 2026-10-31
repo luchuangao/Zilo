@@ -5,6 +5,45 @@ import JavaScriptCore
 @testable import OwnList
 
 final class DocumentConsistencyTests: XCTestCase {
+    func testDocumentShortcutKeysAreUniqueAndHeadingsCoverAllLevels() {
+        let bindings = DocumentShortcut.allCases.map { $0.display }
+        XCTAssertEqual(Set(bindings).count,bindings.count)
+        XCTAssertEqual(DocumentShortcut.allCases.compactMap(\.headingLevel),Array(1...6))
+        XCTAssertFalse(bindings.contains("⌘ N")); XCTAssertFalse(bindings.contains("⌘ Z"))
+        XCTAssertEqual(DocumentShortcut.togglePreview.display,"⇧ ⌘ M")
+    }
+    @MainActor func testMarkdownBoldAndItalicShortcutsCombineAndToggleIndependently() {
+        let editor = NSTextView(); editor.isRichText = false; editor.string = "文字"
+        editor.setSelectedRange(NSRange(location: 0,length: 2))
+        MarkdownSourceEditing.apply(.bold,in: editor)
+        XCTAssertEqual(editor.string,"**文字**")
+        MarkdownSourceEditing.apply(.italic,in: editor)
+        XCTAssertEqual(editor.string,"***文字***")
+        MarkdownSourceEditing.apply(.italic,in: editor)
+        XCTAssertEqual(editor.string,"**文字**")
+        MarkdownSourceEditing.apply(.bold,in: editor)
+        XCTAssertEqual(editor.string,"文字")
+    }
+    @MainActor func testHeadingShortcutsReplaceMarkersAndPreserveUnicodeCursor() {
+        let editor = NSTextView(); editor.isRichText = false; editor.allowsUndo = true
+        editor.string = "## 中文🙂标题\n后面"; editor.setSelectedRange(NSRange(location: 7,length: 0))
+        MarkdownSourceEditing.setHeading(6,in: editor)
+        XCTAssertEqual(editor.string,"###### 中文🙂标题\n后面")
+        XCTAssertEqual(editor.selectedRange().location,11)
+        editor.setSelectedRange(NSRange(location: 0,length: 0))
+        MarkdownSourceEditing.setHeading(1,in: editor)
+        XCTAssertEqual(editor.string,"# 中文🙂标题\n后面")
+        XCTAssertEqual(editor.selectedRange().location,2)
+        editor.string = "    ## 第一行\n    第二行\n"; editor.setSelectedRange(NSRange(location: 0,length: editor.string.utf16.count))
+        MarkdownSourceEditing.setHeading(3,in: editor)
+        XCTAssertEqual(editor.string,"    ### 第一行\n    ### 第二行\n")
+        let before = editor.string
+        MarkdownSourceEditing.setHeading(0,in: editor); MarkdownSourceEditing.setHeading(7,in: editor)
+        XCTAssertEqual(editor.string,before)
+        editor.string = ""; editor.setSelectedRange(NSRange(location: 0,length: 0))
+        MarkdownSourceEditing.setHeading(2,in: editor)
+        XCTAssertEqual(editor.string,"## "); XCTAssertEqual(editor.selectedRange().location,3)
+    }
     @MainActor func testPreviewEditFocusPreservesDocumentAndSelection() throws {
         let editor = DocumentTextView(frame: NSRect(x: 0,y: 0,width: 400,height: 200))
         editor.string = "预览切换后直接继续输入"; editor.isEditable = false

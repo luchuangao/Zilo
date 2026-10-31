@@ -171,7 +171,7 @@ struct MainView: View {
             .onChange(of: viewMode) { _,value in if let id = selectedListID, var list = store.lists.first(where: { $0.id == id }), list.defaultView != value { list.defaultView = value; store.save(list,undoable: false) } }
             .onChange(of: searchVisible) { _,visible in if visible { DispatchQueue.main.async { searchFocused = true } } else { search = ""; searchCriteria = TaskSearchCriteria() } }
             .background(Button("新建清单") { listEditorRequest = ListEditorRequest(existing: nil) }.keyboardShortcut("l",modifiers: [.command,.shift]).hidden())
-            .background(Button("搜索任务") { if searchVisible { searchFocused = true } else { searchVisible = true } }.keyboardShortcut("f",modifiers: .command).hidden())
+            .background(Button("搜索任务") { if searchVisible { searchFocused = true } else { searchVisible = true } }.keyboardShortcut("f",modifiers: [.command,.shift]).hidden())
             .sheet(item: $listEditorRequest) { request in
                 ListEditor(existing: request.existing) { list in
                     if !list.folder.isEmpty { expandedFolders.insert(list.folder) }

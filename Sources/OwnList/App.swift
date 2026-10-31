@@ -31,6 +31,7 @@ import AppKit
                     if url.host == "task", let raw = params["id"], let id = UUID(uuidString: raw) { store.selectedTask = id }
                 }
         }.windowStyle(.hiddenTitleBar).defaultSize(width: 1350,height: 850).commands {
+            DocumentShortcutCommands()
             CommandGroup(replacing: .undoRedo) { Button("撤销") { undoDocumentOrTask() }.keyboardShortcut("z"); Button("重做") { undoDocumentOrTask(redo: true) }.keyboardShortcut("z",modifiers: [.command,.shift]) }
             CommandGroup(after: .newItem) { Button("快速添加任务") { DesktopBridge.quickAction?() }.keyboardShortcut("n"); Button("桌面便签") { SideNotesPanel.shared.toggle() }.keyboardShortcut("n",modifiers: [.command,.option]) }
         }
@@ -81,6 +82,19 @@ struct TaskWindow: View {
             }
     }
 }
+struct DocumentShortcutCommands: Commands {
+    @FocusedValue(\.documentShortcuts) private var actions
+    var body: some Commands {
+        CommandMenu("文档") {
+            ForEach(DocumentShortcut.allCases) { shortcut in
+                Button(LocalizedStringKey(shortcut.title)) { actions?.perform(shortcut) }
+                    .keyboardShortcut(KeyEquivalent(shortcut.key),modifiers: shortcut.modifiers)
+                    .disabled(actions?.enabled != true)
+            }
+        }
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var store: Store?
     func applicationDidBecomeActive(_ notification: Notification) { MainActor.assumeIsolated { guard let store, Capability.groupAvailable, let root = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: Capability.groupID) else { return }; let queue = root.appendingPathComponent("SharedInbox"); for file in (try? FileManager.default.contentsOfDirectory(at: queue,includingPropertiesForKeys: nil)) ?? [] { if let text = try? String(contentsOf: file,encoding: .utf8), store.add(text) != nil { try? FileManager.default.removeItem(at: file) } } } }

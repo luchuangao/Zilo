@@ -64,6 +64,7 @@ struct TaskDetailView: View {
             }
         }.frame(minWidth: previewSidebar ? 520 : 340,maxWidth: .infinity,maxHeight: .infinity,alignment: .topLeading)
             .background(ListTheme.canvas)
+            .focusedSceneValue(\.documentShortcuts,DocumentShortcutActions(enabled: task != nil && !showLink && !showMindMap && !showDate && !showHistory && !showOrganization,perform: performShortcut))
             .onAppear(perform: resetEditor)
             .onChange(of: selectedID) { _,_ in resetEditor() }
     }
@@ -126,6 +127,28 @@ struct TaskDetailView: View {
         DispatchQueue.main.async {
             guard selectedID == taskID else { return }
             document.beginEditing()
+        }
+    }
+    func performShortcut(_ shortcut: DocumentShortcut) {
+        guard let id = selectedID,task != nil,!showLink,!showMindMap,!showDate,!showHistory,!showOrganization,
+              let editor = document.editor,editor.window === NSApp.keyWindow else { return }
+        // Formatting must never change a document while another text field is
+        // being edited (for example the task title, sidebar search or a tag).
+        if shortcut.isFormatting,let focused = NSApp.keyWindow?.firstResponder as? NSTextView,focused !== editor { return }
+        if shortcut == .togglePreview {
+            previewSelection.wrappedValue = previewDocument ? 0 : 1
+            return
+        }
+        beginBodyEditing(taskID: id)
+        if shortcut == .find || shortcut == .findNext || shortcut == .findPrevious {
+            DispatchQueue.main.async {
+                guard selectedID == id else { return }
+                document.find(shortcut == .find ? .showFindInterface : shortcut == .findNext ? .nextMatch : .previousMatch)
+            }
+        } else {
+            document.beginEditing()
+            if let level = shortcut.headingLevel { document.setHeading(level) }
+            else { applyFormat(shortcut == .bold ? .bold : shortcut == .italic ? .italic : .link) }
         }
     }
     func beginEntry(_ entry: String) {
@@ -371,7 +394,7 @@ struct TaskDetailView: View {
             VStack(alignment: .leading,spacing: 6) {
                 Text("链接地址").font(.callout)
                 TextField("https://example.com",text: $linkAddress).textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("链接地址")
+                    .accessibilityLabel("链接地址").focused($focusedEntry,equals: "link-address").onAppear { focusedEntry = "link-address" }
             }
             VStack(alignment: .leading,spacing: 6) {
                 Text("显示文字（可选）").font(.callout)
