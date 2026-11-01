@@ -24,6 +24,6 @@ Evidence: `.release/20261031-document-shortcuts58/find.png`, `settings-zh.png`, 
 
 ## Delivery status
 
-Debug build and universal Release archive succeeded. Both localization files pass plutil validation. Developer ID export is currently blocked by Xcode `No Accounts` (`export.log`); the user has been asked to restore the account. Build 58 has not replaced the installed notarized Build 57. No signing, notarization or installation success is claimed until the account blocker is resolved.
+Debug build and universal Release archive succeeded. Both localization files pass plutil validation. On 2026-11-01, Xcode account access recovered: final Developer ID export and notarization succeeded (`export-final.log`). The stapled Build 58 passed strict codesign verification, ticket validation and Gatekeeper (Notarized Developer ID), then replaced `/Applications/Zilo.app`; Build 57 is retained as `/Applications/Zilo.app.build57-before-shortcuts58`. Native installed-app verification confirmed version 1.0 (58), restored production task/list state and Settings → Keyboard shortcuts with the complete bindings. The compressed `Zilo-1.0-58.dmg` also passed image verification. Production content was not edited during installation verification.
 
 final result: passed
