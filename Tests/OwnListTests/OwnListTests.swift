@@ -353,6 +353,7 @@ final class OwnListTests: XCTestCase {
         let unchanged = try await view.evaluateJavaScript("window.scrollY") as? Double
         XCTAssertEqual(unchanged,offset)
         coordinator.update(source + "\n最新中文🙂",root: nil,dark: true,in: view)
+        for _ in 0..<100 { if coordinator.rendered.html.contains("最新中文🙂") { break }; try await Task.sleep(nanoseconds: 10_000_000) }
         let updated = try await view.evaluateJavaScript("document.getElementById('document').innerText") as? String
         XCTAssertTrue(updated?.contains("最新中文🙂") == true)
         let after = try await view.evaluateJavaScript("window.scrollY") as? Double

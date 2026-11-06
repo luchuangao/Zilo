@@ -1,29 +1,21 @@
-# Mac document shortcuts QA — Build 58
+# Navigation responsiveness QA — Mac Build 59
 
-## Scope
+## Scope and implementation
 
-Add task-document shortcuts and show the actual bindings in Settings → Keyboard shortcuts. The new Documents menu and Settings use the same DocumentShortcut catalog: Command-B/I/K, Command-1…6, Command-F/G/Shift-G, and Command-Shift-M. Existing native text editing and Markdown list operations are documented alongside them. Global quick-add recording is preserved.
+Keep the existing Core Data/SQLite schema and local data. Cache navigation queries by task/filter revision; selection and sync-status changes do not invalidate the cache. Share a task-ID lookup, list counts, tags and sorted child index across rows. Keep at most eight sorted/search results; invalidate date-dependent results on a day/calendar change and overdue searches on a minute change. Preserve all prior filter, pinning, sorting, hierarchy and collapse semantics.
 
-Command-F previously belonged to MainView task search. Task search now uses Command-Shift-F so document find can use Command-F. Existing New list (Command-Shift-L) and desktop note (Command-Option-N) remain listed accurately. Formatting shortcuts avoid mutating the body when another text field or a modal editor is active. Actions are scoped to the current task window.
+CloudKit remote-store/event notifications are coalesced for 150ms. Read and resolve one history snapshot on a private Core Data context, restore downloaded attachments there, and return only value records. Apply only changed collections; unchanged snapshots emit no Store publications. Check both request identity and the local data revision before publishing. A concurrent local edit discards the older snapshot and schedules a fresh read. Reminder scheduling is limited to changed records.
 
-## Functional and visual checks
+Markdown preview parsing/highlighting runs on a serial background queue. Cancel queued work and reject stale completions when switching or dismantling previews. Keep native editing immediate and retain preview scroll position during content updates. Synchronous exports and native rich text rendering retain their existing behavior.
 
-166 tests passed with zero failures (`tests-delivery.log`). New cases cover unique key bindings, heading levels, existing heading replacement, Unicode cursor positions, indentation/multi-line/empty selections, invalid levels, and independent bold/italic combination/toggling. A backing-string mutation issue found during testing was fixed by computing selection offsets before native insertion.
+## Evidence
 
-Native isolated QA verified:
-- Command-Shift-M from Preview enters Edit and focuses the native body.
-- Command-B inserts bold Markdown; Command-I can combine with bold (`***shortcut58***`).
-- Command-1 and Command-6 replace heading markers rather than stacking them.
-- Command-K opens the existing link dialog with selected text and focuses the URL field; Escape cancels normally.
-- Command-F from Preview opens the native document find bar and source editor. Query input highlights matches. Command-G and Command-Shift-G navigate matches.
-- Command-Shift-F opens task search, without taking over Command-F.
-- Standalone task windows can toggle editing and open the document find bar independently.
-- Settings lists app keys, all document commands, native text operations, and Markdown list actions. Scrolling exposes every row. Chinese/light and English/dark captures were inspected; no new label or key clipping was observed.
+- 173 Swift package tests passed, zero failures (`tests-final.log`). Coverage includes legacy filter equivalence, date/overdue cache expiry, task/filter invalidation, selection cache reuse, indexed hierarchy order/collapse/cycles, unchanged remote snapshots, stale local-edit protection, background latest-field/tombstone resolution, rapid preview changes/cancellation and existing editor/undo/persistence regressions.
+- Calculation-only workload: 1,500 tasks × 11 smart-list filters × 10 passes, including cache construction, approximately 185.65ms before and 15.63ms after in the recorded run. Earlier run: 118.46ms / 11.10ms. These are synthetic filter-calculation timings, not total click-to-frame latency or a whole-app speed multiplier.
+- Time Profiler captured native task/list/calendar interactions before and after (`baseline.trace`, `optimized.trace`). The small three-task fixture and automated interaction pacing are insufficient for a reliable end-to-end latency ratio; total sample counts must not be presented as such a comparison.
+- Isolated native QA at `/Users/gaoluchuan/Library/Caches/Zilo-QA/20261106-performance59`: rich/Markdown task selection, empty Work list and Inbox switching, calendar/matrix return, parent collapse/expand, Command-Shift-M editing and preview. Appended a QA-only marker and verified it in rendered preview. Production content was not changed.
+- Mac Debug build and universal Release archive succeeded. Shared persistence/model code also compiled successfully for iOS Simulator (`mobile-build.log`); no phone installation is required for this Mac navigation update. All three Mac bundle plists validate.
 
-Evidence: `.release/20261031-document-shortcuts58/find.png`, `settings-zh.png`, `settings-document-zh.png`, `settings-en-dark.png`. Settings captures are 1560px wide at 2×, corresponding to the existing 780pt settings window. Native main-window capture is 2560px wide at 2×. No visual redesign was requested; existing card, type and color styles are retained. All content changes used the separate `/Users/gaoluchuan/Library/Caches/Zilo-QA/20261031-shortcuts58` fixture root.
+## Delivery
 
-## Delivery status
-
-Debug build and universal Release archive succeeded. Both localization files pass plutil validation. On 2026-11-01, Xcode account access recovered: final Developer ID export and notarization succeeded (`export-final.log`). The stapled Build 58 passed strict codesign verification, ticket validation and Gatekeeper (Notarized Developer ID), then replaced `/Applications/Zilo.app`; Build 57 is retained as `/Applications/Zilo.app.build57-before-shortcuts58`. Native installed-app verification confirmed version 1.0 (58), restored production task/list state and Settings → Keyboard shortcuts with the complete bindings. The compressed `Zilo-1.0-58.dmg` also passed image verification. Production content was not edited during installation verification.
-
-final result: passed
+Developer ID export is currently blocked by Xcode `No Accounts` (`export.log`); the user has been asked to restore the account. Build 59 has not replaced the installed notarized Build 58. A final archive will be used for retry after account recovery. Native performance feedback is pending.

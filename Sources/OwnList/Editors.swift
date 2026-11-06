@@ -33,7 +33,7 @@ struct TaskDetailView: View {
     @State private var customReminder = 45.0
     @FocusState private var focusedEntry: String?
     var selectedID: UUID? { selection == nil ? store.selectedTask : selection?.wrappedValue }
-    var task: TaskItem? { store.tasks.first { $0.id == selectedID } }
+    var task: TaskItem? { selectedID.flatMap { store.taskQueries.byID[$0] } }
     func selectTask(_ id: UUID) {
         commitDocument()
         if let selection { selection.wrappedValue = id }

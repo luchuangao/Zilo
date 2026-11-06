@@ -208,15 +208,28 @@ enum QuickParser {
 enum TaskHierarchy {
     struct Row: Identifiable { let task: TaskItem; let depth: Int; var id: UUID { task.id } }
     static func rows(root: TaskItem,tasks: [TaskItem],collapsed: Set<UUID>) -> [Row] {
-        let children = Dictionary(grouping: tasks.filter { !$0.deleted && $0.parentID != nil },by: { $0.parentID! })
-        var result: [Row] = []; var visited = Set<UUID>()
-        func append(_ task: TaskItem,depth: Int) {
-            guard visited.insert(task.id).inserted else { return }
-            result.append(Row(task: task,depth: depth))
-            guard !collapsed.contains(task.id) else { return }
-            for child in (children[task.id] ?? []).sorted(by: { if ($0.pinned == true) != ($1.pinned == true) { return $0.pinned == true }; return $0.order == $1.order ? $0.created < $1.created : $0.order < $1.order }) { append(child,depth: depth + 1) }
+        Index(tasks: tasks).rows(root: root,collapsed: collapsed)
+    }
+    /// Build once per task revision, rather than once for every visible root.
+    struct Index {
+        let children: [UUID: [TaskItem]]
+        init(tasks: [TaskItem]) {
+            children = Dictionary(grouping: tasks.filter { !$0.deleted && $0.parentID != nil },by: { $0.parentID! })
+                .mapValues { $0.sorted { a,b in
+                    if (a.pinned == true) != (b.pinned == true) { return a.pinned == true }
+                    return a.order == b.order ? a.created < b.created : a.order < b.order
+                } }
         }
-        append(root,depth: 0); return result
+        func rows(root: TaskItem,collapsed: Set<UUID>,includeAbandoned: Bool = true) -> [Row] {
+            var result: [Row] = []; var visited = Set<UUID>()
+            func append(_ task: TaskItem,depth: Int) {
+                guard visited.insert(task.id).inserted else { return }
+                result.append(Row(task: task,depth: depth))
+                guard !collapsed.contains(task.id) else { return }
+                for child in children[task.id] ?? [] where includeAbandoned || child.abandoned != true { append(child,depth: depth + 1) }
+            }
+            append(root,depth: 0); return result
+        }
     }
 }
 

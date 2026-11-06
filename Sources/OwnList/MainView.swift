@@ -324,7 +324,7 @@ struct MainView: View {
         }.background(ListTheme.sidebar)
     }
     var folders: [String] { Array(Set(store.lists.filter { !$0.deleted && !$0.folder.isEmpty }.map(\.folder))).sorted() }
-    var tags: [String] { Array(Set(store.tasks.filter { !$0.deleted }.flatMap(\.tags))).sorted() }
+    var tags: [String] { store.taskQueries.tags }
     var sidebarKeys: [String] {
         var keys = SmartListOption.primary.filter { smartVisible($0.id) }.map(\.id)
         for folder in folders where expandedFolders.contains(folder) {
@@ -387,7 +387,7 @@ struct MainView: View {
     }
     func nav(_ text: String,_ icon: String,_ key: String) -> some View { sidebarChoice(text,icon,key,count: key == "trash" ? store.trashEntryCount : ["completed","archived","abandoned"].contains(key) ? filtered(key).count : filtered(key).filter { $0.isPendingTask }.count) }
     func listRow(_ list: TaskList) -> some View {
-        let count = store.tasks.filter { $0.listID == list.id && $0.isPendingTask && $0.parentID == nil }.count
+        let count = store.taskQueries.listCounts[list.id] ?? 0
         return sidebarChoice(list.name,"line.3.horizontal","list:" + list.id.uuidString,color: list.color == "none" ? nil : list.color.listColor,count: count)
             .contextMenu { Button("编辑清单") { listEditorRequest = ListEditorRequest(existing: list) }; Button("删除清单",role: .destructive) { if store.deleteList(list.id) { selection = "trash" } } }
             .overlay(alignment: dragFeedback.state?.listAfter == true ? .bottom : .top) { if dragFeedback.state?.listTarget == list.id { ListTheme.accent.frame(height: 2).allowsHitTesting(false) } }
@@ -398,21 +398,11 @@ struct MainView: View {
     }
     var selectedListID: UUID? { selection.hasPrefix("list:") ? UUID(uuidString: String(selection.dropFirst(5))) : nil }
     var title: String { switch selection { case "today": return ZiloLanguage.text("今天"); case "tomorrow": return ZiloLanguage.text("明天"); case "week": return ZiloLanguage.text("最近 7 天"); case "inbox": return ZiloLanguage.text("收集箱"); case "all": return ZiloLanguage.text("全部任务"); case "completed": return ZiloLanguage.text("已完成"); case "archived": return ZiloLanguage.text("归档任务"); case "abandoned": return ZiloLanguage.text("已放弃"); case "trash": return ZiloLanguage.text("回收站"); case "starred": return ZiloLanguage.text("收藏"); case "templates": return ZiloLanguage.text("任务模板"); default: if let id = selectedListID { return store.lists.first { $0.id == id }?.name ?? "清单" }; if selection.hasPrefix("tag:") { return "#" + selection.dropFirst(4) }; return store.filters.first { "filter:" + $0.id.uuidString == selection }?.name ?? "任务" } }
-    func filtered(_ key: String) -> [TaskItem] {
-        store.tasks.filter { t in
-            if key == "trash" { return t.deleted }; guard !t.deleted else { return false }; if key == "abandoned" { return t.abandoned == true && !t.isTemplate && (t.parentID == nil || !store.tasks.contains { $0.id == t.parentID && $0.abandoned == true && !$0.deleted }) }; guard t.abandoned != true else { return false }
-            if key == "archived" { return t.archived == true }; if key == "templates" { return t.isTemplate && t.parentID == nil }; guard t.archived != true else { return false }; guard !t.isTemplate && t.parentID == nil else { return false }
-            switch key { case "today": return t.due.map { $0 < Calendar.current.date(byAdding: .day,value: 1,to: Calendar.current.startOfDay(for: Date()))! } == true && !t.completed
-            case "tomorrow": return t.due.map { Calendar.current.isDateInTomorrow($0) } == true && !t.completed
-            case "week": return t.due.map { $0 < Calendar.current.date(byAdding: .day,value: 7,to: Calendar.current.startOfDay(for: Date()))! } == true && !t.completed
-            case "inbox": return t.listID == nil
-            case "all": return true
-            case "completed": return t.completed
-            case "starred": return t.starred
-            default: if key.hasPrefix("list:") { return t.listID?.uuidString == String(key.dropFirst(5)) }; if key.hasPrefix("tag:") { return t.tags.contains(String(key.dropFirst(4))) }; if let filter = store.filters.first(where: { "filter:" + $0.id.uuidString == key }) { return filter.matches(t) }; return false }
-        }
+    func filtered(_ key: String) -> [TaskItem] { store.taskQueries.filtered(key) }
+    var sortedTasks: [TaskItem] {
+        store.taskQueries.sorted(selection,sort: sort,search: searchVisible ? search : "",
+                                 criteria: searchVisible ? searchCriteria : nil,all: searchVisible && searchAll)
     }
-    var sortedTasks: [TaskItem] { (searchVisible && searchAll ? store.tasks.filter { !$0.deleted && !$0.isTemplate } : filtered(selection)).filter { searchVisible ? searchCriteria.matches($0,query: search) : true }.sorted { a,b in if (a.pinned == true) != (b.pinned == true) { return a.pinned == true }; switch sort { case "日期": return (a.due ?? .distantFuture) < (b.due ?? .distantFuture); case "优先级": return a.priority > b.priority; case "标题": return a.title.localizedStandardCompare(b.title) == .orderedAscending; case "创建时间": return a.created > b.created; default: return a.order < b.order } } }
     func importFile() { let p = NSOpenPanel(); p.allowedContentTypes = [.json,.commaSeparatedText,.plainText]; if p.runModal() == .OK, let url = p.url { do { importPreview = try ImportService.preview(url); showImport = true } catch { store.error = error.localizedDescription } } }
     func renameFolder(_ old: String) { let alert = NSAlert(); alert.messageText = ZiloLanguage.text("重命名文件夹"); let field = NSTextField(string: old); field.frame = NSRect(x: 0,y: 0,width: 260,height: 24); alert.accessoryView = field; alert.addButton(withTitle: "保存"); alert.addButton(withTitle: "取消"); if alert.runModal() == .alertFirstButtonReturn { for var list in store.lists.filter({ $0.folder == old }) { list.folder = field.stringValue.trimmingCharacters(in: .whitespaces); store.save(list) } } }
 }
@@ -568,7 +558,7 @@ struct TaskWorkspace: View {
     func reorder(_ section: String,_ from: IndexSet,_ to: Int) { guard sort == "手动" else { return }; var data = visible.filter { !$0.completed && $0.section == section }; data.move(fromOffsets: from,toOffset: to); let before = store.backup; for (index,t) in data.enumerated() { store.mutate(t.id) { $0.order = Double(index) } }; store.groupUndo(before) }
     func hierarchyRows(_ root: TaskItem) -> some View {
         VStack(alignment: .leading,spacing: 0) {
-            ForEach(isTrash ? [TaskHierarchy.Row(task: root,depth: 0)] : TaskHierarchy.rows(root: root,tasks: store.tasks.filter { creationContext == "abandoned" || $0.abandoned != true },collapsed: collapsedTasks)) { entry in
+            ForEach(isTrash ? [TaskHierarchy.Row(task: root,depth: 0)] : store.taskQueries.hierarchy.rows(root: root,collapsed: collapsedTasks,includeAbandoned: creationContext == "abandoned")) { entry in
                 row(entry.task).padding(.leading,CGFloat(entry.depth) * 24).id("task:" + entry.task.id.uuidString)
             }
             if !isTrash,
@@ -632,7 +622,7 @@ struct TaskWorkspace: View {
         return .child
     }
     func row(_ t: TaskItem) -> some View {
-        let children = store.tasks.filter { $0.parentID == t.id && !$0.deleted }
+        let children = store.taskQueries.hierarchy.children[t.id] ?? []
         let summary = showSummaries ? TaskDocument.summary(t) : ""
         let hasContent = t.notes.contains { !$0.isWhitespace }
         let statusDescriptions: [String?] = [children.isEmpty ? nil : ZiloLanguage.text("子任务") + " \(children.filter(\.completed).count)/\(children.count)",hasContent ? ZiloLanguage.text("任务正文") : nil,t.attachments.isEmpty ? nil : ZiloLanguage.text("附件")]
@@ -765,5 +755,92 @@ private struct TaskRowInteractionAppearance: ViewModifier {
                     .frame(width: 16,height: 24).offset(x: 0,y: 8)
                     .help("拖动：上／下方排序，中间放为子任务").accessibilityLabel("拖动任务“" + task.title + "”")
             }
+    }
+}
+
+/// Derived navigation data belongs to a task/filter revision, never to selection
+/// or sync-status changes. The bounded result cache does not retain old revisions.
+final class TaskQueryCache {
+    let tasks: [TaskItem]
+    let filters: [SavedFilter]
+    let byID: [UUID: TaskItem]
+    let hierarchy: TaskHierarchy.Index
+    let tags: [String]
+    let listCounts: [UUID: Int]
+    private var calendar: Calendar
+    private var day: Date
+    private var now: Date
+    private var results: [String: [TaskItem]] = [:]
+    private struct Query: Equatable {
+        var key: String; var sort: String; var search: String; var criteria: TaskSearchCriteria?; var all: Bool
+    }
+    private var sortedResults: [(Query,[TaskItem])] = []
+    init(tasks: [TaskItem],filters: [SavedFilter],now: Date = Date(),calendar: Calendar = .current) {
+        self.tasks = tasks; self.filters = filters; self.now = now; self.calendar = calendar; day = calendar.startOfDay(for: now)
+        byID = Dictionary(tasks.map { ($0.id,$0) },uniquingKeysWith: { _,last in last })
+        hierarchy = TaskHierarchy.Index(tasks: tasks)
+        tags = Array(Set(tasks.filter { !$0.deleted }.flatMap(\.tags))).sorted()
+        var counts: [UUID: Int] = [:]
+        for task in tasks where task.isPendingTask && task.parentID == nil {
+            if let list = task.listID { counts[list,default: 0] += 1 }
+        }
+        listCounts = counts
+    }
+    func updateClock(now: Date = Date(),calendar: Calendar = .current) {
+        let next = calendar.startOfDay(for: now)
+        if next != day || calendar != self.calendar { results.removeAll(); sortedResults.removeAll() }
+        // Overdue searches also depend on the current minute, not just the day.
+        if Int(now.timeIntervalSince1970 / 60) != Int(self.now.timeIntervalSince1970 / 60) {
+            sortedResults.removeAll { $0.0.criteria?.date == "overdue" }
+        }
+        self.now = now; self.calendar = calendar; day = next
+    }
+    func filtered(_ key: String) -> [TaskItem] {
+        if let cached = results[key] { return cached }
+        let tomorrow = calendar.date(byAdding: .day,value: 1,to: day)!
+        let weekEnd = calendar.date(byAdding: .day,value: 7,to: day)!
+        let filter = filters.first { "filter:" + $0.id.uuidString == key }
+        let value = tasks.filter { t in
+            if key == "trash" { return t.deleted }
+            guard !t.deleted else { return false }
+            if key == "abandoned" { return t.abandoned == true && !t.isTemplate && (t.parentID == nil || byID[t.parentID!].map { $0.abandoned != true || $0.deleted } != false) }
+            guard t.abandoned != true else { return false }
+            if key == "archived" { return t.archived == true }
+            if key == "templates" { return t.isTemplate && t.parentID == nil }
+            guard t.archived != true,!t.isTemplate,t.parentID == nil else { return false }
+            switch key {
+            case "today": return !t.completed && t.due.map { $0 < tomorrow } == true
+            case "tomorrow": return !t.completed && t.due.map { $0 >= tomorrow && $0 < calendar.date(byAdding: .day,value: 1,to: tomorrow)! } == true
+            case "week": return !t.completed && t.due.map { $0 < weekEnd } == true
+            case "inbox": return t.listID == nil
+            case "all": return true
+            case "completed": return t.completed
+            case "starred": return t.starred
+            default:
+                if key.hasPrefix("list:") { return t.listID?.uuidString == String(key.dropFirst(5)) }
+                if key.hasPrefix("tag:") { return t.tags.contains(String(key.dropFirst(4))) }
+                return filter?.matches(t,now: now) == true
+            }
+        }
+        results[key] = value; return value
+    }
+    func sorted(_ key: String,sort: String,search: String = "",criteria: TaskSearchCriteria? = nil,all: Bool = false) -> [TaskItem] {
+        let query = Query(key: key,sort: sort,search: search,criteria: criteria,all: all)
+        if let i = sortedResults.firstIndex(where: { $0.0 == query }) {
+            let hit = sortedResults.remove(at: i); sortedResults.append(hit); return hit.1
+        }
+        let source = all ? tasks.filter { !$0.deleted && !$0.isTemplate } : filtered(key)
+        let value = source.filter { criteria?.matches($0,query: search,now: now,calendar: calendar) ?? true }.sorted { a,b in
+            if (a.pinned == true) != (b.pinned == true) { return a.pinned == true }
+            switch sort {
+            case "日期": return (a.due ?? .distantFuture) < (b.due ?? .distantFuture)
+            case "优先级": return a.priority > b.priority
+            case "标题": return a.title.localizedStandardCompare(b.title) == .orderedAscending
+            case "创建时间": return a.created > b.created
+            default: return a.order < b.order
+            }
+        }
+        if sortedResults.count >= 8 { sortedResults.removeFirst() }
+        sortedResults.append((query,value)); return value
     }
 }

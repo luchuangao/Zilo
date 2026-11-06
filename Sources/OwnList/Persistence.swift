@@ -52,7 +52,7 @@ final class Persistence {
         container.loadPersistentStores { _, error in if let error { self.loadError = error.localizedDescription; self.onCloudEvent?("存储错误：\(error.localizedDescription)") } }
         container.viewContext.automaticallyMergesChangesFromParent = true
         container.viewContext.mergePolicy = NSMergeByPropertyObjectTrumpMergePolicy
-        observer = NotificationCenter.default.addObserver(forName: .NSPersistentStoreRemoteChange, object: nil, queue: .main) { [weak self] _ in self?.fieldCache.removeAll(); self?.cacheLoaded = false; self?.container.viewContext.refreshAllObjects(); self?.onChange?() }
+        observer = NotificationCenter.default.addObserver(forName: .NSPersistentStoreRemoteChange, object: nil, queue: .main) { [weak self] _ in self?.fieldCache.removeAll(); self?.cacheLoaded = false; self?.onChange?() }
         cloudObserver = NotificationCenter.default.addObserver(forName: NSPersistentCloudKitContainer.eventChangedNotification, object: nil, queue: .main) { [weak self] n in
             guard let event = n.userInfo?[NSPersistentCloudKitContainer.eventNotificationUserInfoKey] as? NSPersistentCloudKitContainer.Event else { return }
             let message: String
@@ -65,13 +65,15 @@ final class Persistence {
             if event.endDate != nil { self?.fieldCache.removeAll(); self?.cacheLoaded = false; self?.onChange?() }
         }
     }
-    func versions(owner: UUID? = nil, kind: String? = nil) throws -> [FieldVersion] {
+    func versions(owner: UUID? = nil, kind: String? = nil, context: NSManagedObjectContext? = nil) throws -> [FieldVersion] {
+        let context = context ?? container.viewContext
         let r = NSFetchRequest<NSManagedObject>(entityName: "FieldVersion"); if let owner { r.predicate = NSPredicate(format: "owner == %@", owner as CVarArg) }
         if let kind { r.predicate = NSPredicate(format: "kind == %@", kind) }
-        return try container.viewContext.fetch(r).compactMap { o in guard let id = o.value(forKey: "id") as? UUID, let owner = o.value(forKey: "owner") as? UUID, let kind = o.value(forKey: "kind") as? String, let field = o.value(forKey: "field") as? String, let json = o.value(forKey: "json") as? String, let timestamp = o.value(forKey: "timestamp") as? Date else { return nil }; return FieldVersion(id: id, owner: owner, kind: kind, field: field, json: json, timestamp: timestamp) }.sorted { $0.timestamp == $1.timestamp ? $0.id.uuidString < $1.id.uuidString : $0.timestamp < $1.timestamp }
+        return try context.fetch(r).compactMap { o in guard let id = o.value(forKey: "id") as? UUID, let owner = o.value(forKey: "owner") as? UUID, let kind = o.value(forKey: "kind") as? String, let field = o.value(forKey: "field") as? String, let json = o.value(forKey: "json") as? String, let timestamp = o.value(forKey: "timestamp") as? Date else { return nil }; return FieldVersion(id: id, owner: owner, kind: kind, field: field, json: json, timestamp: timestamp) }.sorted { $0.timestamp == $1.timestamp ? $0.id.uuidString < $1.id.uuidString : $0.timestamp < $1.timestamp }
     }
-    func load<T: ListRecord>(_ type: T.Type) throws -> [T] {
-        let values = try versions(kind: T.kind); var objects: [UUID: [String: Any]] = [:]
+    func load<T: ListRecord>(_ type: T.Type,context: NSManagedObjectContext? = nil,history: [FieldVersion]? = nil) throws -> [T] {
+        let context = context ?? container.viewContext
+        let values = try history?.filter { $0.kind == T.kind } ?? versions(kind: T.kind,context: context); var objects: [UUID: [String: Any]] = [:]
         // Resolve newest fields first. Historical versions remain available for
         // activity/restore, but their large document bodies need not be decoded.
         var resolved: [UUID: Set<String>] = [:]
@@ -80,7 +82,7 @@ final class Persistence {
             var decoded = try JSONSerialization.jsonObject(with: Data(value.json.utf8), options: [.fragmentsAllowed])
             if value.field == "richText", let marker = decoded as? [String: String], let path = marker["documentBlob"] {
                 let request = NSFetchRequest<NSManagedObject>(entityName: "AttachmentBlob"); request.predicate = NSPredicate(format: "path == %@",path); request.fetchLimit = 1
-                guard let data = try container.viewContext.fetch(request).first?.value(forKey: "data") as? Data else { onCloudEvent?("正文图片正在下载…"); continue }
+                guard let data = try context.fetch(request).first?.value(forKey: "data") as? Data else { DispatchQueue.main.async { [weak self] in self?.onCloudEvent?("正文图片正在下载…") }; continue }
                 decoded = data.base64EncodedString()
             }
             resolved[value.owner,default: []].insert(value.field)
@@ -139,9 +141,33 @@ final class Persistence {
         do { try body(); try container.viewContext.save() }
         catch { container.viewContext.rollback(); fieldCache.removeAll(); cacheLoaded = false; throw error }
     }
-    func restoreBlobs() throws {
+    func restoreBlobs(context: NSManagedObjectContext? = nil) throws {
+        let context = context ?? container.viewContext
         let r = NSFetchRequest<NSManagedObject>(entityName: "AttachmentBlob")
-        for object in try container.viewContext.fetch(r) { if let path = object.value(forKey: "path") as? String, path.hasPrefix("Attachments/"), !path.contains(".."), let data = object.value(forKey: "data") as? Data { let url = root.appendingPathComponent(path); if !FileManager.default.fileExists(atPath: url.path) { try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),withIntermediateDirectories: true); try data.write(to: url,options: .atomic) } } }
+        for object in try context.fetch(r) { if let path = object.value(forKey: "path") as? String, path.hasPrefix("Attachments/"), !path.contains(".."), let data = object.value(forKey: "data") as? Data { let url = root.appendingPathComponent(path); if !FileManager.default.fileExists(atPath: url.path) { try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),withIntermediateDirectories: true); try data.write(to: url,options: .atomic) } } }
+    }
+    /// A private context owns every managed object in this read. Only value
+    /// records cross back to the UI; all fields are resolved from one snapshot.
+    func readSnapshot(completion: @escaping (Result<Backup,Error>) -> Void) {
+        let context = container.newBackgroundContext()
+        context.perform { [self] in
+            let result = Result { () throws -> Backup in
+                try context.setQueryGenerationFrom(.current)
+                if !inMemory { try restoreBlobs(context: context) }
+                let history = try versions(context: context)
+                return Backup(tasks: try load(TaskItem.self,context: context,history: history),
+                              lists: try load(TaskList.self,context: context,history: history),
+                              filters: try load(SavedFilter.self,context: context,history: history),
+                              habits: try load(Habit.self,context: context,history: history),
+                              focus: try load(FocusRecord.self,context: context,history: history),
+                              subscriptions: try load(CalendarSubscription.self,context: context,history: history),
+                              countdowns: try load(Countdown.self,context: context,history: history),
+                              sideNotes: try load(SideNote.self,context: context,history: history),
+                              noteFolders: try load(SideNoteFolder.self,context: context,history: history))
+            }
+            context.reset()
+            DispatchQueue.main.async { completion(result) }
+        }
     }
     func restoreField(_ version: FieldVersion) throws {
         let o = NSEntityDescription.insertNewObject(forEntityName: "FieldVersion", into: container.viewContext)
@@ -152,13 +178,27 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
 #if os(macOS)
 @MainActor final class Store: ObservableObject {
     let persistence: Persistence
-    @Published var tasks: [TaskItem] = []; @Published var lists: [TaskList] = []; @Published var filters: [SavedFilter] = []; @Published var habits: [Habit] = []; @Published var focus: [FocusRecord] = []; @Published var subscriptions: [CalendarSubscription] = []
-    @Published var sideNotes: [SideNote] = []; @Published var noteFolders: [SideNoteFolder] = []
-    @Published var countdowns: [Countdown] = []; @Published var activity: [ActivityEntry] = []
+    @Published var tasks: [TaskItem] = [] { didSet { queryCache = nil; dataRevision &+= 1 } }
+    @Published var lists: [TaskList] = [] { didSet { dataRevision &+= 1 } }
+    @Published var filters: [SavedFilter] = [] { didSet { queryCache = nil; dataRevision &+= 1 } }
+    @Published var habits: [Habit] = [] { didSet { dataRevision &+= 1 } }
+    @Published var focus: [FocusRecord] = [] { didSet { dataRevision &+= 1 } }
+    @Published var subscriptions: [CalendarSubscription] = [] { didSet { dataRevision &+= 1 } }
+    @Published var sideNotes: [SideNote] = [] { didSet { dataRevision &+= 1 } }
+    @Published var noteFolders: [SideNoteFolder] = [] { didSet { dataRevision &+= 1 } }
+    @Published var countdowns: [Countdown] = [] { didSet { dataRevision &+= 1 } }
+    @Published var activity: [ActivityEntry] = []
     @Published var checkingSync = false
     @Published var taskRevealToken = UUID()
     @Published var notificationTask: UUID?; @Published var notificationHabit: UUID?; @Published var notificationCountdown: UUID?; @Published var notificationModule: Module?
     @Published var error: String?; @Published var syncStatus = "本地保存"; @Published var selectedTask: UUID?
+    private var reloadRequest = UUID()
+    private var queryCache: TaskQueryCache?
+    private(set) var dataRevision: UInt64 = 0
+    var taskQueries: TaskQueryCache {
+        if queryCache == nil { queryCache = TaskQueryCache(tasks: tasks,filters: filters) }
+        queryCache!.updateClock(); return queryCache!
+    }
     private var backupTimer: Timer?
     private var undoStack: [Backup] = []; private var redoStack: [Backup] = []
     init(persistence: Persistence = Persistence()) {
@@ -166,7 +206,7 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         #if DEBUG
         selectedTask = ZiloScreenshotData.seed(persistence)
         #endif
-        persistence.onChange = { [weak self] in Task { @MainActor in self?.reload(); self?.reschedule() } }
+        persistence.onChange = { [weak self] in Task { @MainActor in self?.scheduleReload() } }
         persistence.onCloudEvent = { [weak self] message in Task { @MainActor in self?.syncStatus = message; if message.hasPrefix("同步失败") { self?.logActivity("同步失败",detail: message) } else if message.hasPrefix("已同步") { self?.logActivity("数据已同步",detail: message) } } }
         if !persistence.inMemory, let data = try? Data(contentsOf: persistence.root.appendingPathComponent("Activity.json")) { activity = (try? JSONDecoder().decode([ActivityEntry].self,from: data)) ?? [] }
         do { try persistence.ensureDefaultCountdowns(started: (try? persistence.load(TaskItem.self).map(\.created).min()) ?? Date()) } catch { self.error = error.localizedDescription }
@@ -178,6 +218,56 @@ struct Backup: Codable { var formatVersion = 1; var created = Date(); var tasks:
         do { if let failure = persistence.loadError { throw ServiceError.message(failure) }; if !persistence.inMemory { try persistence.restoreBlobs() }; tasks = try persistence.load(TaskItem.self); lists = try persistence.load(TaskList.self); filters = try persistence.load(SavedFilter.self); habits = try persistence.load(Habit.self); focus = try persistence.load(FocusRecord.self); subscriptions = try persistence.load(CalendarSubscription.self); countdowns = try persistence.load(Countdown.self); sideNotes = try persistence.load(SideNote.self); noteFolders = try persistence.load(SideNoteFolder.self); try migrateInlineDocumentImages() } catch { self.error = "读取数据失败：\(error.localizedDescription)" }
         if !persistence.inMemory { DesktopBridge.updateBadge(tasks.filter { $0.isPendingTask && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
         WidgetSnapshot.write(tasks: tasks, lists: lists) }
+    }
+    /// Coalesce CloudKit's remote-store and event notifications. A local edit
+    /// invalidates an in-flight read so older snapshots cannot replace new text.
+    func scheduleReload() {
+        let request = UUID(); reloadRequest = request
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let self,self.reloadRequest == request else { return }
+            let revision = self.dataRevision
+            self.persistence.readSnapshot { [weak self] result in
+                guard let self,self.reloadRequest == request else { return }
+                guard self.dataRevision == revision else { self.scheduleReload(); return }
+                switch result {
+                case .success(let data):
+                    _ = self.applyRemoteSnapshot(data,expectedRevision: revision)
+                case .failure(let error): self.error = "读取数据失败：\(error.localizedDescription)"
+                }
+            }
+        }
+    }
+    @discardableResult func applyRemoteSnapshot(_ data: Backup,expectedRevision: UInt64) -> Bool {
+        guard expectedRevision == dataRevision else { return false }
+        func changed<T: ListRecord & Equatable>(_ old: [T],_ new: [T]) -> Bool {
+            guard old.count == new.count else { return true }
+            let byID = Dictionary(old.map { ($0.id,$0) },uniquingKeysWith: { _,last in last })
+            return new.contains { byID[$0.id] != $0 }
+        }
+        let oldTasks = Dictionary(tasks.map { ($0.id,$0) },uniquingKeysWith: { _,last in last })
+        let oldHabits = Dictionary(habits.map { ($0.id,$0) },uniquingKeysWith: { _,last in last })
+        let oldDays = Dictionary(countdowns.map { ($0.id,$0) },uniquingKeysWith: { _,last in last })
+        let taskChanged = changed(tasks,data.tasks),listChanged = changed(lists,data.lists)
+        if taskChanged { tasks = data.tasks }
+        if listChanged { lists = data.lists }
+        if changed(filters,data.filters) { filters = data.filters }
+        if changed(habits,data.habits) { habits = data.habits }
+        if changed(focus,data.focus) { focus = data.focus }
+        if changed(subscriptions,data.subscriptions) { subscriptions = data.subscriptions }
+        if let values = data.countdowns,changed(countdowns,values) { countdowns = values }
+        if let values = data.sideNotes,changed(sideNotes,values) { sideNotes = values }
+        if let values = data.noteFolders,changed(noteFolders,values) { noteFolders = values }
+        do { try migrateInlineDocumentImages() } catch { self.error = error.localizedDescription }
+        if !persistence.inMemory {
+            if taskChanged || listChanged {
+                DesktopBridge.updateBadge(tasks.filter { $0.isPendingTask && $0.due.map { Calendar.current.isDateInToday($0) } == true }.count)
+                WidgetSnapshot.write(tasks: tasks,lists: lists)
+            }
+            for task in tasks where oldTasks[task.id] != task { NotificationService.shared.schedule(task) }
+            for habit in habits where oldHabits[habit.id] != habit { NotificationService.shared.schedule(habit) }
+            for day in countdowns where oldDays[day.id] != day { NotificationService.shared.schedule(day) }
+        }
+        return true
     }
     var trashEntryCount: Int {
         let deletedLists = Set(lists.filter(\.deleted).map(\.id))

@@ -181,6 +181,7 @@ struct MarkdownPreviewView: NSViewRepresentable {
     }
     static func dismantleNSView(_ view: WKWebView,coordinator: Coordinator) {
         view.configuration.userContentController.removeScriptMessageHandler(forName: "ziloBeginEditing")
+        coordinator.cancelRendering()
         coordinator.previewInteraction.cancel()
         coordinator.onBeginEditing = nil; view.navigationDelegate = nil
     }
@@ -221,15 +222,31 @@ struct MarkdownPreviewView: NSViewRepresentable {
         var displayedTransparent = false
         var displayedPaper: UInt32?
         var displayedCompact = false
+        private static let renderQueue = DispatchQueue(label: "Zilo.PreviewRendering",qos: .userInitiated)
+        private var renderRequest = UUID()
+        private var pendingRender: DispatchWorkItem?
         var rendered = MarkdownRenderer.Result(html: "",codes: [])
         func update(_ value: String,root: URL?,dark: Bool,theme: String = "blue",in view: WKWebView) {
             guard value != source || root != self.root || dark != self.dark || theme != self.theme || paperBackground != displayedPaper || compact != displayedCompact || transparentBackground != displayedTransparent else { return }
             let contentChanged = value != source
             self.source = value; self.root = root; self.dark = dark; self.theme = theme
             displayedPaper = paperBackground; displayedCompact = compact; displayedTransparent = transparentBackground
-            if contentChanged { rendered = MarkdownRenderer.shared.render(value) }
+            if contentChanged {
+                pendingRender?.cancel()
+                let request = UUID(); renderRequest = request
+                let work = DispatchWorkItem { [weak self,weak view] in
+                    let result = MarkdownRenderer.shared.render(value)
+                    DispatchQueue.main.async {
+                        guard let self,let view,self.renderRequest == request else { return }
+                        self.rendered = result
+                        if self.ready { self.display(in: view) }
+                    }
+                }
+                pendingRender = work; Self.renderQueue.async(execute: work)
+            }
             if ready { display(in: view) }
         }
+        func cancelRendering() { pendingRender?.cancel(); pendingRender = nil; renderRequest = UUID() }
         func display(in view: WKWebView) {
             guard let data = try? JSONSerialization.data(withJSONObject: [rendered.html,dark,String(format: "#%06X",AppTheme.resolve(theme).value("accent",dark: dark))]),let args = String(data: data,encoding: .utf8) else { return }
             let paper = transparentBackground ? "transparent" : paperBackground.map { String(format: "#%06X",$0) } ?? ""
