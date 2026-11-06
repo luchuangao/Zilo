@@ -18,4 +18,4 @@ Markdown preview parsing/highlighting runs on a serial background queue. Cancel 
 
 ## Delivery
 
-Developer ID export is currently blocked by Xcode `No Accounts` (`export.log`); the user has been asked to restore the account. Build 59 has not replaced the installed notarized Build 58. A final archive will be used for retry after account recovery. Native performance feedback is pending.
+The user confirmed the test build feels more responsive and restored the Xcode account. Final Developer ID export and notarization succeeded (`export-installed.log`). The stapled Build 59 passed strict codesign verification, ticket validation and Gatekeeper (Notarized Developer ID), then replaced `/Applications/Zilo.app`; Build 58 is retained at `/Applications/Zilo.app.build58-before-performance59`. Native installed-app verification confirmed version 1.0 (59), restored production list/task selection and loaded the existing document preview. The production sidebar displayed a completed iCloud sync after launch. No production content was edited. The compressed `Zilo-1.0-59.dmg` passed image verification.
